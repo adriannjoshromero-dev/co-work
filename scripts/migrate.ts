@@ -1,4 +1,4 @@
-import "./load-env";
+import "./load-env.ts";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { Pool } from "pg";

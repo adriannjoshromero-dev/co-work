@@ -116,9 +116,9 @@ export async function saveFeedback(user: SessionUser, id: string, status: Interv
     update interviews set status=$1, feedback=$2, feedback_submitted_at=now(),
       version=version+1, updated_at=now()
     where id=$3 and workspace_id=$4 and interviewer_confirmed_at is not null
-      and feedback_confirmed_at is null and version=$5
+      and scheduled_at <= now() and feedback_confirmed_at is null and version=$5
   `, [status, feedback, id, user.workspaceId, expectedVersion]);
-  if (!result.rowCount) throw new AppError(409, "This interview changed or its feedback was confirmed. Your update was not applied.", "STALE_OR_LOCKED");
+  if (!result.rowCount) throw new AppError(409, "Feedback is available only after the interview starts and before it is confirmed. Refresh and try again.", "STALE_OR_LOCKED");
 }
 
 export async function confirmFeedback(user: SessionUser, id: string, expectedVersion: number) {

@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatInTimeZone } from "date-fns-tz";
 import {
-  ArrowRight, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download,
+  CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock3, Download,
   ExternalLink, FileText, Globe2, Link2, LoaderCircle, LockKeyhole, LogOut, MessageSquareText,
-  List, Pencil, Plus, Settings2, Sparkles, Trash2, UploadCloud, X,
+  List, Palette, Pencil, Plus, RefreshCw, Settings2, Trash2, UploadCloud, X,
 } from "lucide-react";
 import { useUploadThing } from "@/lib/uploadthing";
 import { formatInterviewTime, getZonedDateKey, localInputToUtc, relativeStartLabel } from "@/lib/time";
@@ -17,6 +17,14 @@ const statusLabels: Record<InterviewStatus, string> = {
 };
 const finalStatuses = ["DONE", "CANCELED", "FAILED", "RESCHEDULED"] as const;
 const commonTimezones = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Phoenix", "Europe/London", "Europe/Paris", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney"];
+const themes = [
+  { value: "warm", label: "Warm" },
+  { value: "ocean", label: "Ocean" },
+  { value: "forest", label: "Forest" },
+  { value: "plum", label: "Plum" },
+] as const;
+type ThemeName = (typeof themes)[number]["value"];
+type ViewMode = "OVERVIEW" | "CALENDAR";
 
 function interviewName(interview: Interview) {
   return interview.resume.name.replace(/\.(pdf|docx?)$/i, "").replace(/[_-]+/g, " ");
@@ -36,7 +44,8 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
   const [editing, setEditing] = useState<Interview | null | undefined>(undefined);
   const [timezoneOpen, setTimezoneOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Interview | null>(null);
-  const [viewMode, setViewMode] = useState<"OVERVIEW" | "CALENDAR">("OVERVIEW");
+  const [viewMode, setViewMode] = useState<ViewMode>("OVERVIEW");
+  const themeSelect = useRef<HTMLSelectElement>(null);
   const [newInterviewTime, setNewInterviewTime] = useState<string | undefined>();
   const [toast, setToast] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -46,6 +55,18 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("handoff-theme");
+    const nextTheme = themes.some((item) => item.value === saved) ? saved as ThemeName : "warm";
+    document.documentElement.dataset.theme = nextTheme;
+    if (themeSelect.current) themeSelect.current.value = nextTheme;
+  }, []);
+
+  function changeTheme(nextTheme: ThemeName) {
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem("handoff-theme", nextTheme);
+  }
 
   async function refresh(message?: string) {
     setRefreshing(true);
@@ -59,6 +80,15 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
       }
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function refreshOverview() {
+    try {
+      await refresh("You’re viewing the latest updates.");
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Couldn’t refresh the interviews.");
+      window.setTimeout(() => setToast(""), 3500);
     }
   }
 
@@ -79,6 +109,7 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
         </div>
         <div className="header-actions">
           <WorkspaceClock timezone={data.user.timezone} />
+          <label className="theme-picker" title="Color theme"><Palette size={15} /><select ref={themeSelect} defaultValue="warm" onChange={(event) => changeTheme(event.target.value as ThemeName)} aria-label="Color theme">{themes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
           <button className="timezone-chip" onClick={() => isCoordinator && setTimezoneOpen(true)} title={isCoordinator ? "Change workspace timezone" : "Workspace timezone"}>
             <Globe2 size={15} /> {data.user.timezone.replace("America/", "").replace("_", " ")}
             {isCoordinator && <Settings2 size={14} />}
@@ -90,10 +121,11 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
 
       <div className="welcome-row">
         <div>
-          <p className="eyebrow">{formatInTimeZone(now, data.user.timezone, "EEEE, MMMM d")}</p>
-          <h1>{isCoordinator ? "Keep the handoff smooth." : `Hi, ${data.user.displayName.split(" ")[0]}! You’re all set.`}</h1>
+          <h1>Interviews</h1>
+          <p className="page-subtitle">{formatInTimeZone(now, data.user.timezone, "EEEE, MMMM d")} · {isCoordinator ? "Manage schedules and handoffs" : "Review your schedule and next actions"}</p>
         </div>
         <div className="welcome-actions">
+          {viewMode === "OVERVIEW" && <button className="button button-secondary refresh-button" disabled={refreshing} onClick={() => void refreshOverview()}>{refreshing ? <LoaderCircle className="spin" size={17} /> : <RefreshCw size={17} />} Refresh</button>}
           <div className="view-switcher" role="group" aria-label="Dashboard view">
             <button className={viewMode === "OVERVIEW" ? "active" : ""} onClick={() => setViewMode("OVERVIEW")}><List size={16} /> Overview</button>
             <button className={viewMode === "CALENDAR" ? "active" : ""} onClick={() => setViewMode("CALENDAR")}><CalendarDays size={16} /> Calendar</button>
@@ -178,10 +210,8 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
     const key = getZonedDateKey(item.scheduledAt, timezone);
     return key >= visibleStart && key <= visibleEnd;
   });
-  const interviewHours = visibleInterviews.map((item) => Number(formatInTimeZone(item.scheduledAt, timezone, "H")));
-  const startHour = Math.max(0, Math.min(7, interviewHours.length ? Math.min(...interviewHours) : 7));
-  const latestEnd = visibleInterviews.map((item) => Number(formatInTimeZone(new Date(+new Date(item.scheduledAt) + item.durationMinutes * 60_000), timezone, "H")) + 1);
-  const endHour = Math.min(24, Math.max(20, latestEnd.length ? Math.max(...latestEnd) : 20));
+  const startHour = 0;
+  const endHour = 24;
   const pixelsPerHour = 68;
   const gridHeight = (endHour - startHour) * pixelsPerHour;
   const hours = Array.from({ length: endHour - startHour }, (_, index) => startHour + index);
@@ -195,7 +225,7 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
     const element = scrollArea.current;
     if (!element) return;
     const currentHour = Number(formatInTimeZone(new Date(), timezone, "H"));
-    element.scrollTop = Math.max(0, (currentHour - startHour - 1) * pixelsPerHour);
+    element.scrollTop = Math.max(0, (currentHour - startHour - 1) * pixelsPerHour - 20);
   }, [calendarMode, startHour, timezone]);
 
   const rangeLabel = calendarMode === "DAY"
@@ -248,9 +278,9 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
               <div className="calendar-timezone">{formatInTimeZone(now, timezone, "zzz")}</div>
               {days.map((day) => <div key={day} className={day === todayKey ? "calendar-day-heading today" : "calendar-day-heading"}><span>{dateKeyLabel(day, { weekday: "short" })}</span><b>{dateKeyLabel(day, { day: "numeric" })}</b></div>)}
             </div>
-            <div className="calendar-body" style={{ height: gridHeight }}>
+            <div className="calendar-body" style={{ height: gridHeight, gridTemplateColumns: `72px repeat(${days.length}, minmax(110px, 1fr))` }}>
               <div className="calendar-time-axis">{hours.map((hour) => <span key={hour} style={{ top: (hour - startHour) * pixelsPerHour }}>{hourLabel(hour)}</span>)}</div>
-              <div className="calendar-day-columns" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(110px, 1fr))` }}>
+              <div className="calendar-day-columns">
                 {days.map((day) => {
                   const dayInterviews = visibleInterviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === day);
                   const currentMinutes = Number(formatInTimeZone(now, timezone, "H")) * 60 + Number(formatInTimeZone(now, timezone, "m"));
@@ -288,33 +318,26 @@ function CoordinatorView({ interviews, timezone, onOpen, onEdit, onDelete, now }
   const filterValues: Array<"ALL" | InterviewStatus> = ["ALL", "UPCOMING", "DONE", "CANCELED", "FAILED", "RESCHEDULED"];
   const awaiting = interviews.filter((item) => item.feedback && !item.feedbackConfirmedAt);
   const unconfirmed = interviews.filter((item) => item.status === "UPCOMING" && !item.interviewerConfirmedAt);
-  const visible = interviews.filter((item) => filter === "ALL" || item.status === filter).sort((a, b) => {
-    const futureA = new Date(a.scheduledAt) >= now;
-    const futureB = new Date(b.scheduledAt) >= now;
-    if (futureA && futureB) return +new Date(a.scheduledAt) - +new Date(b.scheduledAt);
-    return +new Date(b.scheduledAt) - +new Date(a.scheduledAt);
-  });
+  const upcoming = interviews.filter((item) => item.status === "UPCOMING" && +new Date(item.scheduledAt) + item.durationMinutes * 60_000 > +now).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+  const next = upcoming[0];
+  const visible = interviews.filter((item) => filter === "ALL" || item.status === filter).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
 
   return <>
     <section className="summary-grid" aria-label="Workspace summary">
-      <SummaryCard icon={<Clock3 />} tone="peach" count={unconfirmed.length} label="Waiting for interviewer" hint="Unconfirmed handoffs" />
-      <SummaryCard icon={<MessageSquareText />} tone="lilac" count={awaiting.length} label="Feedback to review" hint={awaiting.length ? "Needs your confirmation" : "Nothing waiting—nice!"} />
-      <SummaryCard icon={<Check />} tone="mint" count={interviews.filter((i) => i.feedbackConfirmedAt).length} label="Closed loops" hint="Feedback confirmed" />
+      <SummaryCard icon={<CalendarDays />} tone="peach" count={upcoming.length} label="Upcoming" hint="Scheduled interviews" />
+      <SummaryCard icon={<Clock3 />} tone="lilac" count={unconfirmed.length} label="To confirm" hint="Waiting for interviewer" />
+      <SummaryCard icon={<MessageSquareText />} tone="mint" count={awaiting.length} label="Review feedback" hint="Needs your confirmation" />
     </section>
-
-    {awaiting.length > 0 && <section className="section-block callout-section">
-      <div className="section-title"><div><p className="eyebrow">YOUR TURN</p><h2>Feedback ready for review</h2></div><span className="count-bubble">{awaiting.length}</span></div>
-      <div className="card-grid">{awaiting.map((item) => <InterviewCard key={item.id} interview={item} timezone={timezone} onOpen={onOpen} emphasized />)}</div>
-    </section>}
+    {next && <NextInterviewPanel interview={next} timezone={timezone} now={now} onOpen={onOpen} />}
 
     <section className="section-block">
       <div className="section-title section-title-wrap">
-        <div><p className="eyebrow">INTERVIEW LIBRARY</p><h2>Everything in one place</h2></div>
+        <div><p className="eyebrow">ALL INTERVIEWS</p><h2>Interview list</h2></div>
         <div className="filter-row" role="group" aria-label="Filter interviews">
           {filterValues.map((value) => <button key={value} className={filter === value ? "filter active" : "filter"} onClick={() => setFilter(value)}>{value === "ALL" ? "All" : statusLabels[value]}</button>)}
         </div>
       </div>
-      {visible.length ? <div className="list-stack">{visible.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} onEdit={onEdit} onDelete={onDelete} />)}</div> : <EmptyState title="No interviews here yet" text="Try another filter or schedule something new." />}
+      {visible.length ? <div className="list-stack">{visible.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} onEdit={onEdit} onDelete={onDelete} />)}</div> : <EmptyState title="No interviews yet" text={filter === "ALL" ? "Schedule the first interview to get started." : "No interviews match this filter."} />}
     </section>
   </>;
 }
@@ -322,54 +345,31 @@ function CoordinatorView({ interviews, timezone, onOpen, onEdit, onDelete, now }
 type ViewProps = { interviews: Interview[]; timezone: string; onOpen: (i: Interview) => void; now: Date };
 function InterviewerView({ interviews, timezone, onOpen, now }: ViewProps) {
   const todayKey = getZonedDateKey(now, timezone);
-  const activeUpcoming = interviews.filter((item) => item.status === "UPCOMING" && (+new Date(item.scheduledAt) + item.durationMinutes * 60_000) > +now);
+  const activeUpcoming = interviews.filter((item) => item.status === "UPCOMING" && (+new Date(item.scheduledAt) + item.durationMinutes * 60_000) > +now).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
   const next = activeUpcoming[0];
-  const today = interviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === todayKey).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
-  const future = interviews.filter((item) => item.status === "UPCOMING" && getZonedDateKey(item.scheduledAt, timezone) > todayKey);
-  const history = interviews.filter((item) => item.status !== "UPCOMING" || (+new Date(item.scheduledAt) + item.durationMinutes * 60_000) <= +now).sort((a, b) => +new Date(b.scheduledAt) - +new Date(a.scheduledAt));
+  const today = interviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === todayKey);
+  const needsFeedback = interviews.filter((item) => item.interviewerConfirmedAt && !item.feedbackConfirmedAt && +new Date(item.scheduledAt) <= +now);
+  const visible = [...interviews].sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
 
   return <>
-    <NextInterviewHero next={next} todayCount={today.filter((item) => item.status === "UPCOMING" && +new Date(item.scheduledAt) > +now).length} hadInterviewsToday={today.length > 0} timezone={timezone} now={now} onOpen={onOpen} />
-    <section className="section-block">
-      <div className="section-title"><div><p className="eyebrow">TODAY</p><h2>Your day at a glance</h2></div><span className="count-bubble">{today.length}</span></div>
-      {today.length ? <div className="timeline">{today.map((item) => <TimelineItem key={item.id} interview={item} timezone={timezone} now={now} onOpen={onOpen} />)}</div> : <EmptyState title="A clear day" text="No interviews today. Enjoy the breathing room." />}
+    <section className="summary-grid" aria-label="Interview summary">
+      <SummaryCard icon={<CalendarDays />} tone="peach" count={today.length} label="Today" hint="Interviews on your schedule" />
+      <SummaryCard icon={<Clock3 />} tone="lilac" count={activeUpcoming.length} label="Upcoming" hint="Still ahead" />
+      <SummaryCard icon={<MessageSquareText />} tone="mint" count={needsFeedback.length} label="Needs feedback" hint="Your next actions" />
     </section>
-    {future.length > 0 && <section className="section-block"><div className="section-title"><div><p className="eyebrow">COMING UP</p><h2>Later on the calendar</h2></div></div><div className="card-grid">{future.map((item) => <InterviewCard key={item.id} interview={item} timezone={timezone} onOpen={onOpen} />)}</div></section>}
-    <section className="section-block"><div className="section-title"><div><p className="eyebrow">HISTORY</p><h2>Previous interviews</h2></div></div>{history.length ? <div className="list-stack compact">{history.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} />)}</div> : <EmptyState title="No history yet" text="Finished interviews will stay safe here." />}</section>
+    {next && <NextInterviewPanel interview={next} timezone={timezone} now={now} onOpen={onOpen} />}
+    <section className="section-block"><div className="section-title"><div><p className="eyebrow">ALL INTERVIEWS</p><h2>Your interview list</h2></div></div>{visible.length ? <div className="list-stack">{visible.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} />)}</div> : <EmptyState title="No interviews yet" text="New interviews will appear here when they are scheduled." />}</section>
   </>;
 }
 
-function NextInterviewHero({ next, todayCount, hadInterviewsToday, timezone, now, onOpen }: { next?: Interview; todayCount: number; hadInterviewsToday: boolean; timezone: string; now: Date; onOpen: (i: Interview) => void }) {
-  if (!next) return <section className="next-hero empty-next"><div className="hero-spark"><Sparkles /></div><div><p className="eyebrow">NEXT INTERVIEW</p><h2>{hadInterviewsToday ? "No more interviews today." : "No interviews on the horizon."}</h2><p>You’re all caught up. Tiny victory dance encouraged.</p></div></section>;
-  const isToday = getZonedDateKey(next.scheduledAt, timezone) === getZonedDateKey(now, timezone);
-  const todayParts = getZonedDateKey(now, timezone).split("-").map(Number);
-  const tomorrowKey = new Date(Date.UTC(todayParts[0], todayParts[1] - 1, todayParts[2] + 1)).toISOString().slice(0, 10);
-  const isTomorrow = getZonedDateKey(next.scheduledAt, timezone) === tomorrowKey;
-  const start = formatInTimeZone(next.scheduledAt, timezone, "h:mm a");
-  const end = formatInTimeZone(+new Date(next.scheduledAt) + next.durationMinutes * 60_000, timezone, "h:mm a zzz");
-  return <section className="next-hero">
-    <div className="hero-copy">
-      <p className="eyebrow">NEXT INTERVIEW</p>
-      {!isToday && <p className="quiet-lead">No interviews today. Next one is {isTomorrow ? "tomorrow" : formatInTimeZone(next.scheduledAt, timezone, "EEEE, MMM d")} at {start}.</p>}
-      <h2>{interviewName(next)}</h2>
-      <div className="countdown"><span className="pulse-dot" />{relativeStartLabel(next.scheduledAt, next.durationMinutes, now)}</div>
-      <p className="hero-time">{formatInTimeZone(next.scheduledAt, timezone, "EEEE, MMM d")} · {start} – {end}</p>
-      <div className="hero-badges"><Badge confirmed={!!next.interviewerConfirmedAt} />{todayCount > 1 && <span>{todayCount - 1} more today</span>}</div>
-    </div>
-    <button className="button button-ink button-large" onClick={() => onOpen(next)}>Open interview <ArrowRight size={19} /></button>
-    <div className="hero-doodle" aria-hidden="true">✦</div>
-  </section>;
-}
-
 function SummaryCard({ icon, tone, count, label, hint }: { icon: React.ReactNode; tone: string; count: number; label: string; hint: string }) {
-  return <div className="summary-card"><span className={`summary-icon ${tone}`}>{icon}</span><div><strong>{count}</strong><h3>{label}</h3><p>{hint}</p></div></div>;
+  return <div className="summary-card"><span className={`summary-icon ${tone}`}>{icon}</span><div className="summary-copy"><h3>{label}</h3><p>{hint}</p></div><strong className="summary-count">{count}</strong></div>;
 }
 
-function InterviewCard({ interview, timezone, onOpen, emphasized = false }: { interview: Interview; timezone: string; onOpen: (i: Interview) => void; emphasized?: boolean }) {
-  return <button className={`interview-card ${emphasized ? "emphasized" : ""}`} onClick={() => onOpen(interview)}>
-    <div className="card-top"><StatusBadge status={interview.status} />{interview.feedback && !interview.feedbackConfirmedAt && <span className="attention-dot" title="Feedback waiting" />}</div>
-    <h3>{interviewName(interview)}</h3><p><CalendarDays size={16} />{formatInterviewTime(interview.scheduledAt, timezone)}</p>
-    <div className="card-bottom"><Badge confirmed={!!interview.interviewerConfirmedAt} /><ChevronRight size={18} /></div>
+function NextInterviewPanel({ interview, timezone, now, onOpen }: { interview: Interview; timezone: string; now: Date; onOpen: (item: Interview) => void }) {
+  return <button className="next-interview" onClick={() => onOpen(interview)}>
+    <div className="next-interview-copy"><span>Next interview</span><strong>{interviewName(interview)}</strong><small>{formatInterviewTime(interview.scheduledAt, timezone)} · {relativeStartLabel(interview.scheduledAt, interview.durationMinutes, now)}</small></div>
+    <span className="next-interview-action">Open interview <ChevronRight size={18} /></span>
   </button>;
 }
 
@@ -384,16 +384,6 @@ function InterviewRow({ interview, timezone, onOpen, onEdit, onDelete }: { inter
     {onEdit && interview.interviewerConfirmedAt && <span className="locked-note"><LockKeyhole size={14} /> Details locked</span>}
     <button className="icon-button row-chevron" onClick={() => onOpen(interview)} aria-label="Open details"><ChevronRight size={19} /></button>
   </article>;
-}
-
-function TimelineItem({ interview, timezone, now, onOpen }: { interview: Interview; timezone: string; now: Date; onOpen: (i: Interview) => void }) {
-  const happening = +now >= +new Date(interview.scheduledAt) && +now < +new Date(interview.scheduledAt) + interview.durationMinutes * 60_000;
-  return <button className={`timeline-item ${happening ? "happening" : ""}`} onClick={() => onOpen(interview)}>
-    <span className="timeline-time">{formatInTimeZone(interview.scheduledAt, timezone, "h:mm")}<small>{formatInTimeZone(interview.scheduledAt, timezone, "a")}</small></span>
-    <span className="timeline-line"><i /></span>
-    <span className="timeline-copy"><strong>{interviewName(interview)}</strong><small>{interview.durationMinutes} minutes · {happening ? "Happening now" : statusLabels[interview.status]}</small></span>
-    <Badge confirmed={!!interview.interviewerConfirmedAt} /><ChevronRight size={18} />
-  </button>;
 }
 
 function Badge({ confirmed }: { confirmed: boolean }) {
@@ -438,22 +428,33 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
     setFeedbackMode(false);
   }
   const endTime = +new Date(interview.scheduledAt) + interview.durationMinutes * 60_000;
+  const hasStarted = +now >= +new Date(interview.scheduledAt);
   return <Modal title={interviewName(interview)} subtitle={formatInterviewTime(interview.scheduledAt, timezone)} onClose={onClose} wide>
-    <div className="detail-status-strip"><StatusBadge status={interview.status} /><Badge confirmed={!!interview.interviewerConfirmedAt} />{interview.feedbackConfirmedAt && <span className="micro-badge locked"><LockKeyhole size={12} /> Feedback confirmed</span>}<span className="detail-countdown">{relativeStartLabel(interview.scheduledAt, interview.durationMinutes, now)}</span></div>
+    <div className="detail-status-strip">
+      <StatusBadge status={interview.status} />
+      <Badge confirmed={!!interview.interviewerConfirmedAt} />
+      {interview.feedbackConfirmedAt && <span className="micro-badge locked"><LockKeyhole size={12} /> Feedback confirmed</span>}
+      <span className="detail-countdown">{relativeStartLabel(interview.scheduledAt, interview.durationMinutes, now)}</span>
+      <div className="detail-primary-action">
+        {!isCoordinator && !interview.interviewerConfirmedAt && <button className="button button-primary" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm`, "POST", { expectedVersion: interview.version }, "Interview confirmed. Details are now locked.")}>Confirm interview</button>}
+        {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <button className="button button-ink" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm-feedback`, "POST", { expectedVersion: interview.version }, "Feedback confirmed. The loop is closed.")}>Confirm feedback <Check size={16} /></button>}
+      </div>
+    </div>
     <div className="detail-layout">
       <div className="detail-main">
         <section className="detail-section"><h3>Interview essentials</h3><div className="detail-facts"><div><Clock3 /><span><small>When</small>{formatInTimeZone(interview.scheduledAt, timezone, "EEEE, MMMM d · h:mm a")} – {formatInTimeZone(endTime, timezone, "h:mm a zzz")}</span></div><div><FileText /><span><small>Resume</small><a href={`/api/interviews/${interview.id}/resume`} target="_blank" rel="noopener noreferrer">{interview.resume.name}<Download size={14} /></a></span></div></div><a className="button button-primary button-wide" href={interview.meetingUrl} target="_blank" rel="noopener noreferrer">Join interview <ExternalLink size={18} /></a></section>
         <section className="detail-section"><h3>Job description</h3><div className="rich-content" dangerouslySetInnerHTML={{ __html: interview.jobDescriptionHtml }} /></section>
         <section className="detail-section feedback-section"><div className="subsection-heading"><h3>Interviewer feedback</h3>{interview.feedbackSubmittedAt && <small>Updated {formatInTimeZone(interview.feedbackSubmittedAt, timezone, "MMM d, h:mm a zzz")}</small>}</div>
           {interview.feedback ? <div className="feedback-box"><StatusBadge status={interview.status} /><p>{interview.feedback}</p></div> : <div className="soft-empty">No feedback has been submitted yet.</div>}
-          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && !feedbackMode && <button className="button button-secondary" onClick={() => setFeedbackMode(true)}><MessageSquareText size={17} />{interview.feedback ? "Edit feedback" : "Add final status & feedback"}</button>}
+          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && hasStarted && !feedbackMode && <button className="button button-secondary" onClick={() => setFeedbackMode(true)}><MessageSquareText size={17} />{interview.feedback ? "Edit feedback" : "Add final status & feedback"}</button>}
+          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && !hasStarted && <p className="feedback-locked-note"><LockKeyhole size={14} /> Feedback opens when the interview starts.</p>}
           {feedbackMode && <form className="feedback-form" onSubmit={submitFeedback}><label>Final status<select value={status} onChange={(e) => setStatus(e.target.value as InterviewStatus)}>{finalStatuses.map((value) => <option key={value} value={value}>{statusLabels[value]}</option>)}</select></label><label>Feedback<textarea value={feedback} onChange={(e) => setFeedback(e.target.value)} rows={6} maxLength={10000} placeholder="Share your recommendation, signals, and useful context…" required /></label><div className="form-actions"><button type="button" className="button button-ghost" onClick={() => setFeedbackMode(false)}>Cancel</button><button className="button button-primary" disabled={pending}>{pending && <LoaderCircle className="spin" size={17} />}Save feedback</button></div></form>}
         </section>
       </div>
       <aside className="detail-aside">
-        <div className="aside-card"><h3>Handoff</h3>{interview.interviewerConfirmedAt ? <><div className="aside-check"><CheckCircle2 />Confirmed by {interview.interviewerConfirmedByName}</div><p>Interview details are permanently locked.</p></> : <><div className="aside-wait"><Clock3 />Waiting for interviewer</div><p>Confirm to let the Coordinator know you’ve seen it.</p>{!isCoordinator && <button className="button button-primary button-wide" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm`, "POST", { expectedVersion: interview.version }, "Interview confirmed. Details are now locked.")}>Confirm interview</button>}</>}</div>
+        <div className="aside-card"><h3>Handoff</h3>{interview.interviewerConfirmedAt ? <><div className="aside-check"><CheckCircle2 />Confirmed by {interview.interviewerConfirmedByName}</div><p>Interview details are permanently locked.</p></> : <><div className="aside-wait"><Clock3 />Waiting for interviewer</div><p>The interviewer can confirm from the action bar above.</p></>}</div>
         {isCoordinator && !interview.interviewerConfirmedAt && <div className="aside-card"><h3>Manage</h3><button className="button button-secondary button-wide" onClick={onEdit}><Pencil size={16} />Edit details</button><button className="button button-danger-ghost button-wide" onClick={onDelete}><Trash2 size={16} />Delete interview</button></div>}
-        {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <div className="aside-card attention-card"><h3>Feedback ready</h3><p>Review the note carefully. Confirmation permanently locks the feedback and final status.</p><button className="button button-ink button-wide" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm-feedback`, "POST", { expectedVersion: interview.version }, "Feedback confirmed. The loop is closed.")}>Confirm feedback <Check size={17} /></button></div>}
+        {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <div className="aside-card attention-card"><h3>Feedback ready</h3><p>Review the note carefully, then use the confirmation action above. Confirmation permanently locks the feedback and final status.</p></div>}
         {interview.feedbackConfirmedAt && <div className="aside-card"><div className="aside-check"><LockKeyhole />Feedback confirmed</div><p>Confirmed by {interview.feedbackConfirmedByName}. Status and feedback are permanently locked.</p></div>}
       </aside>
     </div>
@@ -576,7 +577,7 @@ function ScheduleModal({ interview, initialDateTime, timezone, onClose, onSaved 
 function TimezoneModal({ current, onClose, onSaved }: { current: string; onClose: () => void; onSaved: () => Promise<void> }) {
   const [timezone, setTimezone] = useState(current); const [pending, setPending] = useState(false); const [error, setError] = useState("");
   async function submit(event: React.FormEvent) { event.preventDefault(); setPending(true); try { await requestJson("/api/workspace/timezone", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ timezone }) }); await onSaved(); } catch (err) { setError(err instanceof Error ? err.message : "Couldn’t update timezone."); setPending(false); } }
-  return <Modal title="Workspace timezone" subtitle="All interview times and date groups use this timezone." onClose={onClose}><form className="simple-form" onSubmit={submit}><label>Timezone<select value={timezone} onChange={(e) => setTimezone(e.target.value)}>{commonTimezones.map((value) => <option key={value}>{value}</option>)}</select></label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button type="button" className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={pending}>Save timezone</button></div></form></Modal>;
+  return <Modal title="Workspace timezone" subtitle="All interview times and date groups use this timezone." onClose={onClose}><form className="simple-form" onSubmit={submit}><label>Timezone<span className="select-wrap"><select value={timezone} onChange={(e) => setTimezone(e.target.value)}>{commonTimezones.map((value) => <option key={value}>{value}</option>)}</select><ChevronDown size={17} aria-hidden="true" /></span></label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button type="button" className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={pending}>Save timezone</button></div></form></Modal>;
 }
 
 function DeleteDialog({ interview, onClose, onDeleted }: { interview: Interview; onClose: () => void; onDeleted: () => Promise<void> }) {

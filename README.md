@@ -41,7 +41,7 @@ Requirements: Node.js 22+ and a Supabase project (or local PostgreSQL for develo
 
 4. Open `http://localhost:3000` and use the seeded usernames/passwords from your environment.
 
-The migration and seed scripts load `.env.local` automatically. `DATABASE_URL` is preferred, while the Vercel Marketplace-provided `POSTGRES_URL` is also supported. The migration runner records applied files in `_app_migrations`. The canonical SQL lives in `supabase/migrations`, so `supabase db push` is also supported. The seed is idempotent for its fixed demo records. Set all four `SEED_*` values before seeding any shared environment. Seed resume URLs are illustrative; new uploads are real UploadThing objects.
+The migration and seed scripts load `.env.local` automatically. `DATABASE_URL` is preferred, while the Vercel Marketplace-provided `POSTGRES_URL` is also supported. The migration runner records applied files in `_app_migrations`. The canonical SQL lives in `supabase/migrations`, so `supabase db push` is also supported. The seed is idempotent and creates only the empty workspace plus its two login accounts; it does not create interviews. Set all four `SEED_*` values before seeding any shared environment.
 
 ## Resume uploads
 
@@ -75,4 +75,6 @@ For production operations, rotate seed passwords, enable appropriate Supabase ba
 - Schedules are `timestamptz` (UTC internally). Display, date grouping, and date-input conversion use the workspace's IANA timezone, including DST.
 - Passing the scheduled time never changes status; only the Interviewer chooses a final status.
 - Rescheduled records remain historical. Mark the original `RESCHEDULED`, then create a replacement linked by `rescheduled_from_interview_id` (supported by the schema/API; omitted from the fast V1 form).
-- Rich text is allowlist-sanitized on the server; external links get safe `target`/`rel` attributes.
+- Job descriptions use a plain text field and are converted to sanitized paragraph HTML when saved.
+- Overview, Calendar, and Board views provide simple list, schedule, and workflow perspectives. Calendar and Board support day, week, and month periods.
+- Warm, Ocean, Forest, and Plum themes are stored in the browser for each user.
