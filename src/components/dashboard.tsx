@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatInTimeZone } from "date-fns-tz";
 import {
-  ArrowRight, CalendarDays, Check, CheckCircle2, ChevronRight, Clock3, Download,
-  ExternalLink, FileText, Link2, LoaderCircle, LockKeyhole, LogOut, MessageSquareText,
-  Pencil, Plus, Settings2, Sparkles, Trash2, X,
+  ArrowRight, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download,
+  ExternalLink, FileText, Globe2, Link2, LoaderCircle, LockKeyhole, LogOut, MessageSquareText,
+  List, Pencil, Plus, Settings2, Sparkles, Trash2, X,
 } from "lucide-react";
 import { UploadDropzone } from "@/lib/uploadthing";
 import { formatInterviewTime, getZonedDateKey, localInputToUtc, relativeStartLabel } from "@/lib/time";
@@ -36,6 +36,8 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
   const [editing, setEditing] = useState<Interview | null | undefined>(undefined);
   const [timezoneOpen, setTimezoneOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Interview | null>(null);
+  const [viewMode, setViewMode] = useState<"OVERVIEW" | "CALENDAR">("OVERVIEW");
+  const [newInterviewTime, setNewInterviewTime] = useState<string | undefined>();
   const [toast, setToast] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -76,8 +78,9 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
           <span className="role-pill">{isCoordinator ? "Coordinator" : "Interviewer"}</span>
         </div>
         <div className="header-actions">
+          <WorkspaceClock timezone={data.user.timezone} />
           <button className="timezone-chip" onClick={() => isCoordinator && setTimezoneOpen(true)} title={isCoordinator ? "Change workspace timezone" : "Workspace timezone"}>
-            <Clock3 size={15} /> {data.user.timezone.replace("America/", "").replace("_", " ")}
+            <Globe2 size={15} /> {data.user.timezone.replace("America/", "").replace("_", " ")}
             {isCoordinator && <Settings2 size={14} />}
           </button>
           <span className="avatar" aria-hidden="true">{data.user.displayName.charAt(0)}</span>
@@ -90,22 +93,193 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
           <p className="eyebrow">{formatInTimeZone(now, data.user.timezone, "EEEE, MMMM d")}</p>
           <h1>{isCoordinator ? "Keep the handoff smooth." : `Hi, ${data.user.displayName.split(" ")[0]}! You’re all set.`}</h1>
         </div>
-        {isCoordinator && <button className="button button-primary button-large" onClick={() => setEditing(null)}><Plus size={20} /> Schedule interview</button>}
+        <div className="welcome-actions">
+          <div className="view-switcher" role="group" aria-label="Dashboard view">
+            <button className={viewMode === "OVERVIEW" ? "active" : ""} onClick={() => setViewMode("OVERVIEW")}><List size={16} /> Overview</button>
+            <button className={viewMode === "CALENDAR" ? "active" : ""} onClick={() => setViewMode("CALENDAR")}><CalendarDays size={16} /> Calendar</button>
+          </div>
+          {isCoordinator && <button className="button button-primary button-large" onClick={() => { setNewInterviewTime(undefined); setEditing(null); }}><Plus size={20} /> Schedule interview</button>}
+        </div>
       </div>
 
-      {isCoordinator ? (
+      {viewMode === "CALENDAR" ? (
+        <CalendarView interviews={data.interviews} timezone={data.user.timezone} now={now} canSchedule={isCoordinator} onOpen={setSelected} onCreate={(localDateTime) => { setNewInterviewTime(localDateTime); setEditing(null); }} />
+      ) : isCoordinator ? (
         <CoordinatorView interviews={data.interviews} timezone={data.user.timezone} onOpen={setSelected} onEdit={(item) => setEditing(item)} onDelete={setDeleteTarget} now={now} />
       ) : (
         <InterviewerView interviews={data.interviews} timezone={data.user.timezone} onOpen={setSelected} now={now} />
       )}
 
       {selected && <InterviewDetails interview={selected} timezone={data.user.timezone} role={data.user.role} now={now} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} onDelete={() => { setDeleteTarget(selected); setSelected(null); }} onChanged={refresh} />}
-      {editing !== undefined && <ScheduleModal interview={editing} timezone={data.user.timezone} onClose={() => setEditing(undefined)} onSaved={async () => { setEditing(undefined); await refresh(editing ? "Interview updated." : "Interview scheduled and ready for handoff."); }} />}
+      {editing !== undefined && <ScheduleModal interview={editing} initialDateTime={newInterviewTime} timezone={data.user.timezone} onClose={() => { setEditing(undefined); setNewInterviewTime(undefined); }} onSaved={async () => { setEditing(undefined); setNewInterviewTime(undefined); await refresh(editing ? "Interview updated." : "Interview scheduled and ready for handoff."); }} />}
       {timezoneOpen && <TimezoneModal current={data.user.timezone} onClose={() => setTimezoneOpen(false)} onSaved={async () => { setTimezoneOpen(false); await refresh("Workspace timezone updated."); }} />}
       {deleteTarget && <DeleteDialog interview={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={async () => { setDeleteTarget(null); await refresh("Interview deleted."); }} />}
       {toast && <div className="toast" role="status"><CheckCircle2 size={18} />{toast}</div>}
       {refreshing && <div className="refresh-dot" aria-label="Refreshing"><LoaderCircle className="spin" size={16} /></div>}
     </main>
+  );
+}
+
+function WorkspaceClock({ timezone }: { timezone: string }) {
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const update = () => setCurrentTime(new Date());
+    update();
+    const timer = window.setInterval(update, 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="workspace-clock" aria-label={`Current time in ${timezone}`}>
+      <Clock3 size={16} />
+      <span>{currentTime ? formatInTimeZone(currentTime, timezone, "h:mm:ss a") : "--:--:--"}</span>
+      <small>{currentTime ? formatInTimeZone(currentTime, timezone, "zzz") : ""}</small>
+    </div>
+  );
+}
+
+function shiftDateKey(dateKey: string, days: number) {
+  const date = new Date(`${dateKey}T12:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function shiftMonthKey(dateKey: string, months: number) {
+  const date = new Date(`${dateKey.slice(0, 8)}01T12:00:00.000Z`);
+  date.setUTCMonth(date.getUTCMonth() + months);
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfWeek(dateKey: string) {
+  const date = new Date(`${dateKey}T12:00:00.000Z`);
+  return shiftDateKey(dateKey, -((date.getUTCDay() + 6) % 7));
+}
+
+function dateKeyLabel(dateKey: string, options: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).format(new Date(`${dateKey}T12:00:00.000Z`));
+}
+
+function hourLabel(hour: number) {
+  return `${hour % 12 || 12}:00 ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate }: ViewProps & { canSchedule: boolean; onCreate: (localDateTime: string) => void }) {
+  const todayKey = getZonedDateKey(now, timezone);
+  const [selectedDate, setSelectedDate] = useState(todayKey);
+  const [calendarMode, setCalendarMode] = useState<"DAY" | "WEEK" | "MONTH">("WEEK");
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const weekStart = startOfWeek(selectedDate);
+  const weekEnd = shiftDateKey(weekStart, 6);
+  const days = calendarMode === "DAY" ? [selectedDate] : Array.from({ length: 7 }, (_, index) => shiftDateKey(weekStart, index));
+  const visibleStart = days[0];
+  const visibleEnd = days[days.length - 1];
+  const visibleInterviews = interviews.filter((item) => {
+    const key = getZonedDateKey(item.scheduledAt, timezone);
+    return key >= visibleStart && key <= visibleEnd;
+  });
+  const interviewHours = visibleInterviews.map((item) => Number(formatInTimeZone(item.scheduledAt, timezone, "H")));
+  const startHour = Math.max(0, Math.min(7, interviewHours.length ? Math.min(...interviewHours) : 7));
+  const latestEnd = visibleInterviews.map((item) => Number(formatInTimeZone(new Date(+new Date(item.scheduledAt) + item.durationMinutes * 60_000), timezone, "H")) + 1);
+  const endHour = Math.min(24, Math.max(20, latestEnd.length ? Math.max(...latestEnd) : 20));
+  const pixelsPerHour = 68;
+  const gridHeight = (endHour - startHour) * pixelsPerHour;
+  const hours = Array.from({ length: endHour - startHour }, (_, index) => startHour + index);
+  const slots = Array.from({ length: (endHour - startHour) * 2 }, (_, index) => index);
+  const monthStart = `${selectedDate.slice(0, 8)}01`;
+  const monthDays = Array.from({ length: 42 }, (_, index) => shiftDateKey(startOfWeek(monthStart), index));
+  const selectedMonth = selectedDate.slice(0, 7);
+
+  useEffect(() => {
+    if (calendarMode === "MONTH") return;
+    const element = scrollArea.current;
+    if (!element) return;
+    const currentHour = Number(formatInTimeZone(new Date(), timezone, "H"));
+    element.scrollTop = Math.max(0, (currentHour - startHour - 1) * pixelsPerHour);
+  }, [calendarMode, startHour, timezone]);
+
+  const rangeLabel = calendarMode === "DAY"
+    ? dateKeyLabel(selectedDate, { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+    : calendarMode === "MONTH"
+      ? dateKeyLabel(monthStart, { month: "long", year: "numeric" })
+      : `${dateKeyLabel(weekStart, { month: "short", day: "numeric" })} – ${dateKeyLabel(weekEnd, { month: "short", day: "numeric", year: "numeric" })}`;
+
+  function navigate(direction: -1 | 1) {
+    setSelectedDate((date) => calendarMode === "DAY" ? shiftDateKey(date, direction) : calendarMode === "WEEK" ? shiftDateKey(date, direction * 7) : shiftMonthKey(date, direction));
+  }
+
+  return (
+    <section className="calendar-section" aria-label={`${calendarMode.toLowerCase()} interview calendar`}>
+      <div className="calendar-toolbar">
+        <div>
+          <p className="eyebrow">INTERVIEW CALENDAR</p>
+          <h2>{rangeLabel}</h2>
+          <small>Times shown in {timezone.replaceAll("_", " ")}</small>
+        </div>
+        <div className="calendar-controls">
+          <label className="calendar-date-picker"><CalendarDays size={15} /><span>Go to</span><input type="date" value={selectedDate} onChange={(event) => event.target.value && setSelectedDate(event.target.value)} /></label>
+          <div className="calendar-mode-switch" role="group" aria-label="Calendar period">
+            {(["DAY", "WEEK", "MONTH"] as const).map((mode) => <button key={mode} className={calendarMode === mode ? "active" : ""} aria-pressed={calendarMode === mode} onClick={() => setCalendarMode(mode)}>{mode.charAt(0) + mode.slice(1).toLowerCase()}</button>)}
+          </div>
+          <div className="calendar-nav">
+            <button className="button button-ghost" onClick={() => setSelectedDate(todayKey)}>Today</button>
+            <button className="icon-button calendar-nav-button" onClick={() => navigate(-1)} aria-label={`Previous ${calendarMode.toLowerCase()}`}><ChevronLeft /></button>
+            <button className="icon-button calendar-nav-button" onClick={() => navigate(1)} aria-label={`Next ${calendarMode.toLowerCase()}`}><ChevronRight /></button>
+          </div>
+        </div>
+      </div>
+      {canSchedule && <p className="calendar-tip"><Plus size={14} /> Click an empty {calendarMode === "MONTH" ? "date" : "time"} to schedule an interview.</p>}
+      {calendarMode === "MONTH" ? (
+        <div className="month-calendar">
+          <div className="month-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="month-grid">{monthDays.map((day) => {
+            const dayInterviews = interviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === day).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+            return <div key={day} className={`month-cell ${day.slice(0, 7) !== selectedMonth ? "outside" : ""} ${day === todayKey ? "today" : ""}`}>
+              {canSchedule && <button className="month-add-target" onClick={() => onCreate(`${day}T10:00`)} aria-label={`Schedule interview on ${dateKeyLabel(day, { weekday: "long", month: "long", day: "numeric" })}`} />}
+              <span className="month-date">{dateKeyLabel(day, { day: "numeric" })}</span>
+              <div className="month-events">{dayInterviews.slice(0, 3).map((item) => <button key={item.id} className={`month-event calendar-event-${item.status.toLowerCase()}`} onClick={() => onOpen(item)} title={`${formatInterviewTime(item.scheduledAt, timezone)} · ${interviewName(item)}`}><b>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</b><span>{interviewName(item)}</span></button>)}{dayInterviews.length > 3 && <small>+{dayInterviews.length - 3} more</small>}</div>
+            </div>;
+          })}</div>
+        </div>
+      ) : (
+        <div className="calendar-frame">
+          <div className={`calendar-scroll ${calendarMode === "DAY" ? "day-mode" : "week-mode"}`} ref={scrollArea}>
+            <div className="calendar-days-header" style={{ gridTemplateColumns: `72px repeat(${days.length}, minmax(110px, 1fr))` }}>
+              <div className="calendar-timezone">{formatInTimeZone(now, timezone, "zzz")}</div>
+              {days.map((day) => <div key={day} className={day === todayKey ? "calendar-day-heading today" : "calendar-day-heading"}><span>{dateKeyLabel(day, { weekday: "short" })}</span><b>{dateKeyLabel(day, { day: "numeric" })}</b></div>)}
+            </div>
+            <div className="calendar-body" style={{ height: gridHeight }}>
+              <div className="calendar-time-axis">{hours.map((hour) => <span key={hour} style={{ top: (hour - startHour) * pixelsPerHour }}>{hourLabel(hour)}</span>)}</div>
+              <div className="calendar-day-columns" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(110px, 1fr))` }}>
+                {days.map((day) => {
+                  const dayInterviews = visibleInterviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === day);
+                  const currentMinutes = Number(formatInTimeZone(now, timezone, "H")) * 60 + Number(formatInTimeZone(now, timezone, "m"));
+                  const currentTop = ((currentMinutes - startHour * 60) / 60) * pixelsPerHour;
+                  return <div className={day === todayKey ? "calendar-day-column today" : "calendar-day-column"} key={day}>
+                    {hours.map((hour) => <i className="calendar-hour-line" key={hour} style={{ top: (hour - startHour) * pixelsPerHour }} />)}
+                    {canSchedule && slots.map((slot) => {
+                      const totalMinutes = startHour * 60 + slot * 30;
+                      const hour = Math.floor(totalMinutes / 60);
+                      const minute = totalMinutes % 60;
+                      const localDateTime = `${day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+                      return <button key={slot} className="calendar-slot" style={{ top: slot * pixelsPerHour / 2, height: pixelsPerHour / 2 }} onClick={() => onCreate(localDateTime)} aria-label={`Schedule interview ${dateKeyLabel(day, { weekday: "long", month: "long", day: "numeric" })} at ${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`} />;
+                    })}
+                    {day === todayKey && currentTop >= 0 && currentTop <= gridHeight && <div className="calendar-now-line" style={{ top: currentTop }}><span /></div>}
+                    {dayInterviews.map((item, index) => {
+                      const hour = Number(formatInTimeZone(item.scheduledAt, timezone, "H"));
+                      const minute = Number(formatInTimeZone(item.scheduledAt, timezone, "m"));
+                      const top = (((hour * 60 + minute) - startHour * 60) / 60) * pixelsPerHour;
+                      const height = Math.max(30, item.durationMinutes / 60 * pixelsPerHour);
+                      return <button key={item.id} className={`calendar-event calendar-event-${item.status.toLowerCase()}`} style={{ top, height, left: 4 + (index % 3) * 3 }} onClick={() => onOpen(item)} title={`${interviewName(item)} · ${formatInterviewTime(item.scheduledAt, timezone)}`}><strong>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</strong><span>{interviewName(item)}</span>{item.interviewerConfirmedAt && <Check size={11} />}</button>;
+                    })}
+                  </div>;
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -294,8 +468,8 @@ function RichTextEditor({ value, onChange }: { value: string; onChange: (value: 
   return <div className="editor-wrap"><div className="editor-toolbar" role="toolbar" aria-label="Text formatting"><button type="button" onClick={() => command("formatBlock", "h2")}>H</button><button type="button" onClick={() => command("bold")}><b>B</b></button><button type="button" onClick={() => command("italic")}><i>I</i></button><button type="button" onClick={() => command("insertUnorderedList")}>• List</button><span className="editor-link"><Link2 size={14} /><input aria-label="Link URL" type="url" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} placeholder="https://…" /><button type="button" disabled={!linkUrl} onMouseDown={(event) => event.preventDefault()} onClick={() => { command("createLink", linkUrl); setLinkUrl(""); }}>Add</button></span></div><div ref={editor} className="rich-editor" contentEditable suppressContentEditableWarning onInput={(event) => onChange(event.currentTarget.innerHTML)} dangerouslySetInnerHTML={{ __html: value }} aria-label="Job description" /></div>;
 }
 
-function ScheduleModal({ interview, timezone, onClose, onSaved }: { interview: Interview | null; timezone: string; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [dateTime, setDateTime] = useState(() => interview ? formatInTimeZone(interview.scheduledAt, timezone, "yyyy-MM-dd'T'HH:mm") : formatInTimeZone(Date.now() + 86_400_000, timezone, "yyyy-MM-dd'T'10:00"));
+function ScheduleModal({ interview, initialDateTime, timezone, onClose, onSaved }: { interview: Interview | null; initialDateTime?: string; timezone: string; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [dateTime, setDateTime] = useState(() => interview ? formatInTimeZone(interview.scheduledAt, timezone, "yyyy-MM-dd'T'HH:mm") : initialDateTime ?? formatInTimeZone(Date.now() + 86_400_000, timezone, "yyyy-MM-dd'T'10:00"));
   const [duration, setDuration] = useState(interview?.durationMinutes ?? 60);
   const [customDuration, setCustomDuration] = useState(![15,30,45,60,90].includes(interview?.durationMinutes ?? 60));
   const [meetingUrl, setMeetingUrl] = useState(interview?.meetingUrl ?? "");
