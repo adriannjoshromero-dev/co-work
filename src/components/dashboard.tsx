@@ -295,12 +295,12 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
                       return <button key={slot} className="calendar-slot" style={{ top: slot * pixelsPerHour / 2, height: pixelsPerHour / 2 }} onClick={() => onCreate(localDateTime)} aria-label={`Schedule interview ${dateKeyLabel(day, { weekday: "long", month: "long", day: "numeric" })} at ${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`} />;
                     })}
                     {day === todayKey && currentTop >= 0 && currentTop <= gridHeight && <div className="calendar-now-line" style={{ top: currentTop }}><span /></div>}
-                    {dayInterviews.map((item, index) => {
+                    {dayInterviews.map((item) => {
                       const hour = Number(formatInTimeZone(item.scheduledAt, timezone, "H"));
                       const minute = Number(formatInTimeZone(item.scheduledAt, timezone, "m"));
                       const top = (((hour * 60 + minute) - startHour * 60) / 60) * pixelsPerHour;
                       const height = Math.max(30, item.durationMinutes / 60 * pixelsPerHour);
-                      return <button key={item.id} className={`calendar-event calendar-event-${item.status.toLowerCase()}`} style={{ top, height, left: 4 + (index % 3) * 3 }} onClick={() => onOpen(item)} title={`${interviewName(item)} · ${formatInterviewTime(item.scheduledAt, timezone)}`}><strong>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</strong><span>{interviewName(item)}</span>{item.interviewerConfirmedAt && <Check size={11} />}</button>;
+                      return <button key={item.id} className={`calendar-event calendar-event-${item.status.toLowerCase()}`} style={{ top, height, left: 4 }} onClick={() => onOpen(item)} title={`${interviewName(item)} · ${formatInterviewTime(item.scheduledAt, timezone)}`}><strong>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</strong><span>{interviewName(item)}</span>{item.interviewerConfirmedAt && <Check size={11} />}</button>;
                     })}
                   </div>;
                 })}
