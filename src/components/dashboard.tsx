@@ -6,9 +6,9 @@ import { formatInTimeZone } from "date-fns-tz";
 import {
   ArrowRight, CalendarDays, Check, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Download,
   ExternalLink, FileText, Globe2, Link2, LoaderCircle, LockKeyhole, LogOut, MessageSquareText,
-  List, Pencil, Plus, Settings2, Sparkles, Trash2, X,
+  List, Pencil, Plus, Settings2, Sparkles, Trash2, UploadCloud, X,
 } from "lucide-react";
-import { UploadDropzone } from "@/lib/uploadthing";
+import { useUploadThing } from "@/lib/uploadthing";
 import { formatInterviewTime, getZonedDateKey, localInputToUtc, relativeStartLabel } from "@/lib/time";
 import type { DashboardData, Interview, InterviewStatus, ResumeFile } from "@/lib/types";
 
@@ -461,11 +461,86 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
   </Modal>;
 }
 
-function RichTextEditor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
-  const editor = useRef<HTMLDivElement>(null);
-  const [linkUrl, setLinkUrl] = useState("");
-  function command(name: string, argument?: string) { editor.current?.focus(); document.execCommand(name, false, argument); onChange(editor.current?.innerHTML ?? ""); }
-  return <div className="editor-wrap"><div className="editor-toolbar" role="toolbar" aria-label="Text formatting"><button type="button" onClick={() => command("formatBlock", "h2")}>H</button><button type="button" onClick={() => command("bold")}><b>B</b></button><button type="button" onClick={() => command("italic")}><i>I</i></button><button type="button" onClick={() => command("insertUnorderedList")}>• List</button><span className="editor-link"><Link2 size={14} /><input aria-label="Link URL" type="url" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} placeholder="https://…" /><button type="button" disabled={!linkUrl} onMouseDown={(event) => event.preventDefault()} onClick={() => { command("createLink", linkUrl); setLinkUrl(""); }}>Add</button></span></div><div ref={editor} className="rich-editor" contentEditable suppressContentEditableWarning onInput={(event) => onChange(event.currentTarget.innerHTML)} dangerouslySetInnerHTML={{ __html: value }} aria-label="Job description" /></div>;
+function ResumeUploader({ onUploaded, onError, onUploadingChange }: { onUploaded: (resume: ResumeFile) => void; onError: (message: string) => void; onUploadingChange: (uploading: boolean) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const { startUpload, isUploading } = useUploadThing("resume", {
+    onClientUploadComplete: (uploadedFiles) => {
+      const uploaded = uploadedFiles[0];
+      if (!uploaded) {
+        onError("UploadThing completed without returning file details.");
+        return;
+      }
+      const server = uploaded.serverData as ResumeFile | null | undefined;
+      onUploaded(server ?? { key: uploaded.key, url: uploaded.ufsUrl, name: uploaded.name, size: uploaded.size, mimeType: uploaded.type });
+    },
+    onUploadError: (uploadError) => onError(uploadError.message),
+  });
+
+  async function upload(files: FileList | File[]) {
+    const file = files[0];
+    if (!file || isUploading) return;
+    const allowedMimeTypes = ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"];
+    const allowedExtension = /\.(pdf|doc|docx)$/i.test(file.name);
+    if (!allowedMimeTypes.includes(file.type) && !allowedExtension) {
+      setLocalError("Choose a PDF, DOC, or DOCX resume.");
+      if (input.current) input.current.value = "";
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setLocalError("Resume files must be 8 MB or smaller.");
+      if (input.current) input.current.value = "";
+      return;
+    }
+    setLocalError("");
+    onError("");
+    onUploadingChange(true);
+    try {
+      await startUpload([file]);
+    } catch (uploadError) {
+      onError(uploadError instanceof Error ? uploadError.message : "Resume upload failed.");
+    } finally {
+      onUploadingChange(false);
+      if (input.current) input.current.value = "";
+    }
+  }
+
+  return <div>
+    <div className={`resume-dropzone ${dragging ? "dragging" : ""} ${isUploading ? "uploading" : ""}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); void upload(event.dataTransfer.files); }}>
+      <input ref={input} type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => event.target.files && void upload(event.target.files)} disabled={isUploading} />
+      <span className="resume-upload-icon">{isUploading ? <LoaderCircle className="spin" /> : <UploadCloud />}</span>
+      <div className="resume-upload-copy"><strong>{isUploading ? "Uploading resume…" : "Drop a resume here"}</strong><span>or choose a file from your computer</span><small>PDF, DOC, or DOCX · up to 8 MB</small></div>
+      <button type="button" className="button button-secondary" onClick={() => input.current?.click()} disabled={isUploading}>{isUploading ? "Uploading…" : "Choose file"}</button>
+    </div>
+    {localError && <p className="field-error" role="alert">{localError}</p>}
+  </div>;
+}
+
+function htmlToPlainText(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<li(?:\s[^>]*)?>/gi, "• ")
+    .replace(/<\/(?:p|div|h[1-6]|li|ul|ol)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:39|x27);/gi, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function plainTextToHtml(value: string) {
+  const escaped = value.trim()
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+  return escaped.split(/\n{2,}/).map((paragraph) => `<p>${paragraph.replaceAll("\n", "<br>")}</p>`).join("");
 }
 
 function ScheduleModal({ interview, initialDateTime, timezone, onClose, onSaved }: { interview: Interview | null; initialDateTime?: string; timezone: string; onClose: () => void; onSaved: () => Promise<void> }) {
@@ -474,13 +549,15 @@ function ScheduleModal({ interview, initialDateTime, timezone, onClose, onSaved 
   const [customDuration, setCustomDuration] = useState(![15,30,45,60,90].includes(interview?.durationMinutes ?? 60));
   const [meetingUrl, setMeetingUrl] = useState(interview?.meetingUrl ?? "");
   const [resume, setResume] = useState<ResumeFile | null>(interview?.resume ?? null);
-  const [jobDescription, setJobDescription] = useState(interview?.jobDescriptionHtml ?? "<p></p>");
+  const [resumeError, setResumeError] = useState("");
+  const [resumeUploading, setResumeUploading] = useState(false);
+  const [jobDescription, setJobDescription] = useState(() => htmlToPlainText(interview?.jobDescriptionHtml ?? ""));
   const [pending, setPending] = useState(false); const [error, setError] = useState("");
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setPending(true); setError("");
-    if (!resume) { setError("Upload a resume before saving."); setPending(false); return; }
+    if (!resume) { setResumeError("Upload a resume before saving."); setPending(false); return; }
     try {
-      await requestJson(interview ? `/api/interviews/${interview.id}` : "/api/interviews", { method: interview ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scheduledAt: localInputToUtc(dateTime, timezone), durationMinutes: duration, meetingUrl, resume, jobDescriptionHtml: jobDescription, rescheduledFromInterviewId: interview?.rescheduledFromInterviewId ?? null, ...(interview ? { expectedVersion: interview.version } : {}) }) });
+      await requestJson(interview ? `/api/interviews/${interview.id}` : "/api/interviews", { method: interview ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scheduledAt: localInputToUtc(dateTime, timezone), durationMinutes: duration, meetingUrl, resume, jobDescriptionHtml: plainTextToHtml(jobDescription), rescheduledFromInterviewId: interview?.rescheduledFromInterviewId ?? null, ...(interview ? { expectedVersion: interview.version } : {}) }) });
       await onSaved();
     } catch (err) { setError(err instanceof Error ? err.message : "Couldn’t save the interview."); setPending(false); }
   }
@@ -488,10 +565,10 @@ function ScheduleModal({ interview, initialDateTime, timezone, onClose, onSaved 
     <form className="schedule-form" onSubmit={submit}>
       <div className="form-grid"><label>Date & time <input type="datetime-local" value={dateTime} onChange={(e) => setDateTime(e.target.value)} required /><small>{timezone} · daylight saving handled automatically</small></label><fieldset><legend>Duration</legend><div className="duration-options">{[15,30,45,60,90].map((value) => <button type="button" key={value} className={!customDuration && duration === value ? "active" : ""} onClick={() => { setDuration(value); setCustomDuration(false); }}>{value}m</button>)}<button type="button" className={customDuration ? "active" : ""} onClick={() => setCustomDuration(true)}>Custom</button></div>{customDuration && <input type="number" min={10} max={480} value={duration} onChange={(e) => setDuration(Number(e.target.value))} aria-label="Custom duration in minutes" />}</fieldset></div>
       <label>Meeting link <span className="input-with-icon"><Link2 size={17} /><input type="url" value={meetingUrl} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://meet.google.com/…" required /></span></label>
-      <div className="field-group"><span className="field-label">Resume</span>{resume ? <div className="uploaded-file"><FileText /><span><strong>{resume.name}</strong><small>{(resume.size / 1024 / 1024).toFixed(1)} MB · securely stored in UploadThing</small></span><button type="button" className="icon-button" onClick={() => setResume(null)} aria-label="Remove resume"><X size={17} /></button></div> : <UploadDropzone endpoint="resume" className="upload-dropzone" onClientUploadComplete={(files) => { const file = files[0]; const server = file?.serverData as ResumeFile | undefined; if (server) setResume(server); else if (file) setResume({ key: file.key, url: file.ufsUrl, name: file.name, size: file.size, mimeType: file.type }); }} onUploadError={(uploadError) => setError(uploadError.message)} />}</div>
-      <label>Job description <RichTextEditor value={jobDescription} onChange={setJobDescription} /><small>Use headings, emphasis, lists, and links to make the brief easy to scan.</small></label>
+      <div className="field-group"><span className="field-label">Resume</span>{resume ? <div className="uploaded-file"><FileText /><span><strong>{resume.name}</strong><small>{(resume.size / 1024 / 1024).toFixed(1)} MB · securely stored in UploadThing</small></span><button type="button" className="icon-button" onClick={() => setResume(null)} aria-label="Remove resume"><X size={17} /></button></div> : <ResumeUploader onUploaded={(file) => { setResume(file); setResumeError(""); }} onError={setResumeError} onUploadingChange={setResumeUploading} />}{resumeError && <p className="field-error" role="alert">{resumeError}</p>}</div>
+      <label>Job description <textarea className="jd-textarea" value={jobDescription} onChange={(event) => setJobDescription(event.target.value)} placeholder="Write or paste the role, responsibilities, and interview focus…" rows={8} maxLength={40_000} dir="ltr" required /><small>Plain text is saved with your paragraphs and line breaks.</small></label>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="form-actions sticky-actions"><button type="button" className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={pending}>{pending && <LoaderCircle className="spin" size={17} />}{interview ? "Save changes" : "Schedule interview"}</button></div>
+      <div className="form-actions sticky-actions"><button type="button" className="button button-ghost" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={pending || resumeUploading}>{(pending || resumeUploading) && <LoaderCircle className="spin" size={17} />}{resumeUploading ? "Uploading resume…" : interview ? "Save changes" : "Schedule interview"}</button></div>
     </form>
   </Modal>;
 }

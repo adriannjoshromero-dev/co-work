@@ -9,7 +9,7 @@ export const ourFileRouter = {
     "application/pdf": { maxFileSize: "8MB", maxFileCount: 1, acl: "private" },
     "application/msword": { maxFileSize: "8MB", maxFileCount: 1, acl: "private" },
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { maxFileSize: "8MB", maxFileCount: 1, acl: "private" },
-  })
+  }, { awaitServerData: false })
     .middleware(async () => {
       try {
         const user = await requireUser("COORDINATOR");
