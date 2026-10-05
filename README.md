@@ -45,7 +45,7 @@ The migration and seed scripts load `.env.local` automatically. `DATABASE_URL` i
 
 ## Resume uploads
 
-The `/api/uploadthing` route authenticates the Coordinator before issuing an upload. It accepts one private PDF, DOC, or DOCX up to 8 MB. UploadThing stores the bytes; the key, URL, original name, size, and MIME type are validated again when the interview is saved. Authenticated resume downloads use a five-minute signed URL. In UploadThing, enable per-request ACL overrides (or set the app default ACL to private) before the first upload.
+The `/api/uploadthing` route authenticates the Coordinator before issuing an upload. It accepts one PDF, DOC, or DOCX up to 8 MB. UploadThing stores the bytes; the key, URL, original name, size, and MIME type are validated again when the interview is saved. The app requires an authenticated workspace member before redirecting to the stored resume URL. Files use UploadThing's free-tier-compatible `public-read` ACL, so anyone who obtains a raw storage URL can access that file; use private ACLs and signed URLs if the workspace later moves to a paid UploadThing tier.
 
 Deleting an unconfirmed interview removes the database record but does not delete the storage object. Configure an UploadThing orphan-retention process according to your organization's policy.
 

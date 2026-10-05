@@ -6,9 +6,9 @@ const f = createUploadthing();
 
 export const ourFileRouter = {
   resume: f({
-    "application/pdf": { maxFileSize: "8MB", maxFileCount: 1, acl: "private" },
-    "application/msword": { maxFileSize: "8MB", maxFileCount: 1, acl: "private" },
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { maxFileSize: "8MB", maxFileCount: 1, acl: "private" },
+    "application/pdf": { maxFileSize: "8MB", maxFileCount: 1, acl: "public-read" },
+    "application/msword": { maxFileSize: "8MB", maxFileCount: 1, acl: "public-read" },
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { maxFileSize: "8MB", maxFileCount: 1, acl: "public-read" },
   }, { awaitServerData: false })
     .middleware(async () => {
       try {

@@ -53,13 +53,13 @@ export async function listInterviews(workspaceId: string) {
   return result.rows.map(mapInterview);
 }
 
-export async function getResumeKey(workspaceId: string, interviewId: string) {
-  const result = await query<{ resume_key: string }>(
-    "select resume_key from interviews where id=$1 and workspace_id=$2 limit 1",
+export async function getResumeUrl(workspaceId: string, interviewId: string) {
+  const result = await query<{ resume_url: string }>(
+    "select resume_url from interviews where id=$1 and workspace_id=$2 limit 1",
     [interviewId, workspaceId],
   );
   if (!result.rows[0]) throw new AppError(404, "Resume not found.");
-  return result.rows[0].resume_key;
+  return result.rows[0].resume_url;
 }
 
 type InterviewInput = {
