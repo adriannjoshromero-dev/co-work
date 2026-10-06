@@ -337,7 +337,7 @@ function CoordinatorView({ interviews, timezone, onOpen, onEdit, onDelete, now }
           {filterValues.map((value) => <button key={value} className={filter === value ? "filter active" : "filter"} onClick={() => setFilter(value)}>{value === "ALL" ? "All" : statusLabels[value]}</button>)}
         </div>
       </div>
-      {visible.length ? <div className="list-stack">{visible.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} onEdit={onEdit} onDelete={onDelete} />)}</div> : <EmptyState title="No interviews yet" text={filter === "ALL" ? "Schedule the first interview to get started." : "No interviews match this filter."} />}
+      {visible.length ? <GroupedInterviewList interviews={visible} timezone={timezone} now={now} onOpen={onOpen} onEdit={onEdit} onDelete={onDelete} /> : <EmptyState title="No interviews yet" text={filter === "ALL" ? "Schedule the first interview to get started." : "No interviews match this filter."} />}
     </section>
   </>;
 }
@@ -358,7 +358,7 @@ function InterviewerView({ interviews, timezone, onOpen, now }: ViewProps) {
       <SummaryCard icon={<MessageSquareText />} tone="mint" count={needsFeedback.length} label="Needs feedback" hint="Your next actions" />
     </section>
     {next && <NextInterviewPanel interview={next} timezone={timezone} now={now} onOpen={onOpen} />}
-    <section className="section-block"><div className="section-title"><div><p className="eyebrow">ALL INTERVIEWS</p><h2>Your interview list</h2></div></div>{visible.length ? <div className="list-stack">{visible.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} />)}</div> : <EmptyState title="No interviews yet" text="New interviews will appear here when they are scheduled." />}</section>
+    <section className="section-block"><div className="section-title"><div><p className="eyebrow">ALL INTERVIEWS</p><h2>Your interview list</h2></div></div>{visible.length ? <GroupedInterviewList interviews={visible} timezone={timezone} now={now} onOpen={onOpen} /> : <EmptyState title="No interviews yet" text="New interviews will appear here when they are scheduled." />}</section>
   </>;
 }
 
@@ -373,12 +373,40 @@ function NextInterviewPanel({ interview, timezone, now, onOpen }: { interview: I
   </button>;
 }
 
-function InterviewRow({ interview, timezone, onOpen, onEdit, onDelete }: { interview: Interview; timezone: string; onOpen: (i: Interview) => void; onEdit?: (i: Interview) => void; onDelete?: (i: Interview) => void }) {
-  return <article className="interview-row">
+function GroupedInterviewList({ interviews, timezone, now, onOpen, onEdit, onDelete }: { interviews: Interview[]; timezone: string; now: Date; onOpen: (i: Interview) => void; onEdit?: (i: Interview) => void; onDelete?: (i: Interview) => void }) {
+  const todayKey = getZonedDateKey(now, timezone);
+  const tomorrowKey = shiftDateKey(todayKey, 1);
+  const yesterdayKey = shiftDateKey(todayKey, -1);
+  const active = interviews
+    .filter((item) => item.status === "UPCOMING" && +new Date(item.scheduledAt) + item.durationMinutes * 60_000 > +now)
+    .sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+  const happening = active.find((item) => +new Date(item.scheduledAt) <= +now);
+  const focus = happening ?? active.find((item) => +new Date(item.scheduledAt) > +now);
+  const focusLabel = happening ? "Happening now" : focus ? "Next up" : undefined;
+  const groups = Array.from(interviews.reduce((map, interview) => {
+    const dateKey = getZonedDateKey(interview.scheduledAt, timezone);
+    const group = map.get(dateKey) ?? [];
+    group.push(interview);
+    map.set(dateKey, group);
+    return map;
+  }, new Map<string, Interview[]>()));
+
+  return <div className="grouped-interview-list">{groups.map(([dateKey, items]) => {
+    const relativeLabel = dateKey === todayKey ? "Today" : dateKey === tomorrowKey ? "Tomorrow" : dateKey === yesterdayKey ? "Yesterday" : null;
+    const fullLabel = dateKeyLabel(dateKey, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    return <section className="interview-date-group" key={dateKey} aria-labelledby={`interview-date-${dateKey}`}>
+      <header className="interview-date-heading"><div><h3 id={`interview-date-${dateKey}`}>{relativeLabel ?? fullLabel}</h3>{relativeLabel && <span>{fullLabel}</span>}</div><small>{items.length} {items.length === 1 ? "interview" : "interviews"}</small></header>
+      <div className="list-stack">{items.map((item) => <InterviewRow key={item.id} interview={item} timezone={timezone} onOpen={onOpen} onEdit={onEdit} onDelete={onDelete} focusLabel={item.id === focus?.id ? focusLabel : undefined} />)}</div>
+    </section>;
+  })}</div>;
+}
+
+function InterviewRow({ interview, timezone, onOpen, onEdit, onDelete, focusLabel }: { interview: Interview; timezone: string; onOpen: (i: Interview) => void; onEdit?: (i: Interview) => void; onDelete?: (i: Interview) => void; focusLabel?: string }) {
+  return <article className={focusLabel ? "interview-row interview-row-focus" : "interview-row"}>
     <button className="row-main" onClick={() => onOpen(interview)}>
       <span className="date-tile"><b>{formatInTimeZone(interview.scheduledAt, timezone, "d")}</b>{formatInTimeZone(interview.scheduledAt, timezone, "MMM")}</span>
-      <span className="row-copy"><strong>{interviewName(interview)}</strong><small>{formatInTimeZone(interview.scheduledAt, timezone, "EEE · h:mm a zzz")} · {interview.durationMinutes} min</small></span>
-      <span className="row-badges"><StatusBadge status={interview.status} /><Badge confirmed={!!interview.interviewerConfirmedAt} />{interview.feedbackConfirmedAt && <span className="micro-badge locked"><LockKeyhole size={12} /> Feedback confirmed</span>}</span>
+      <span className="row-copy"><strong>{interviewName(interview)}</strong><small>{formatInTimeZone(interview.scheduledAt, timezone, "h:mm a zzz")} · {interview.durationMinutes} min</small></span>
+      <span className="row-badges">{focusLabel && <span className="focus-badge">{focusLabel}</span>}<StatusBadge status={interview.status} /><Badge confirmed={!!interview.interviewerConfirmedAt} />{interview.feedbackConfirmedAt && <span className="micro-badge locked"><LockKeyhole size={12} /> Feedback confirmed</span>}</span>
     </button>
     {onEdit && !interview.interviewerConfirmedAt && <div className="row-actions"><button className="icon-button" onClick={() => onEdit(interview)} aria-label={`Edit ${interviewName(interview)}`}><Pencil size={17} /></button><button className="icon-button danger" onClick={() => onDelete?.(interview)} aria-label={`Delete ${interviewName(interview)}`}><Trash2 size={17} /></button></div>}
     {onEdit && interview.interviewerConfirmedAt && <span className="locked-note"><LockKeyhole size={14} /> Details locked</span>}
