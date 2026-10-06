@@ -320,7 +320,7 @@ function CoordinatorView({ interviews, timezone, onOpen, onEdit, onDelete, now }
   const unconfirmed = interviews.filter((item) => item.status === "UPCOMING" && !item.interviewerConfirmedAt);
   const upcoming = interviews.filter((item) => item.status === "UPCOMING" && +new Date(item.scheduledAt) + item.durationMinutes * 60_000 > +now).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
   const next = upcoming[0];
-  const visible = interviews.filter((item) => filter === "ALL" || item.status === filter).sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+  const visible = interviews.filter((item) => filter === "ALL" || item.status === filter).sort((a, b) => +new Date(b.scheduledAt) - +new Date(a.scheduledAt));
 
   return <>
     <section className="summary-grid" aria-label="Workspace summary">
@@ -349,7 +349,7 @@ function InterviewerView({ interviews, timezone, onOpen, now }: ViewProps) {
   const next = activeUpcoming[0];
   const today = interviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === todayKey);
   const needsFeedback = interviews.filter((item) => item.interviewerConfirmedAt && !item.feedbackConfirmedAt && +new Date(item.scheduledAt) <= +now);
-  const visible = [...interviews].sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+  const visible = [...interviews].sort((a, b) => +new Date(b.scheduledAt) - +new Date(a.scheduledAt));
 
   return <>
     <section className="summary-grid" aria-label="Interview summary">
