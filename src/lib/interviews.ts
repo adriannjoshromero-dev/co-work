@@ -111,14 +111,24 @@ export async function confirmInterview(user: SessionUser, id: string, expectedVe
   if (!result.rowCount) throw new AppError(409, "This interview was already confirmed or changed. Refresh to see the latest version.", "STALE_OR_LOCKED");
 }
 
+export async function cancelInterview(user: SessionUser, id: string, expectedVersion: number) {
+  const result = await query(`
+    update interviews set status='CANCELED', version=version+1, updated_at=now()
+    where id=$1 and workspace_id=$2 and interviewer_confirmed_at is not null
+      and status='UPCOMING' and feedback is null and feedback_confirmed_at is null and version=$3
+  `, [id, user.workspaceId, expectedVersion]);
+  if (!result.rowCount) throw new AppError(409, "Only a confirmed upcoming interview can be canceled. Refresh and review its latest status.", "STALE_OR_LOCKED");
+}
+
 export async function saveFeedback(user: SessionUser, id: string, status: InterviewStatus, feedback: string, expectedVersion: number) {
   const result = await query(`
     update interviews set status=$1, feedback=$2, feedback_submitted_at=now(),
       version=version+1, updated_at=now()
     where id=$3 and workspace_id=$4 and interviewer_confirmed_at is not null
-      and scheduled_at <= now() and feedback_confirmed_at is null and version=$5
+      and scheduled_at <= now() and (status='UPCOMING' or feedback is not null)
+      and feedback_confirmed_at is null and version=$5
   `, [status, feedback, id, user.workspaceId, expectedVersion]);
-  if (!result.rowCount) throw new AppError(409, "Feedback is available only after the interview starts and before it is confirmed. Refresh and try again.", "STALE_OR_LOCKED");
+  if (!result.rowCount) throw new AppError(409, "Feedback is available only after the interview starts, while the meeting is active, and before feedback is confirmed. Refresh and try again.", "STALE_OR_LOCKED");
 }
 
 export async function confirmFeedback(user: SessionUser, id: string, expectedVersion: number) {

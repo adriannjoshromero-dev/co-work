@@ -17,6 +17,9 @@ export const canDeleteInterview = canEditInterview;
 export function canConfirmInterview(state: Pick<LockState, "role" | "interviewerConfirmedAt">) {
   return state.role === "INTERVIEWER" && !state.interviewerConfirmedAt;
 }
+export function canCancelInterview(state: Pick<LockState, "role" | "interviewerConfirmedAt" | "feedback" | "feedbackConfirmedAt" | "status">) {
+  return state.role === "COORDINATOR" && !!state.interviewerConfirmedAt && state.status === "UPCOMING" && !state.feedback && !state.feedbackConfirmedAt;
+}
 export function canEditFeedback(state: Pick<LockState, "role" | "interviewerConfirmedAt" | "feedbackConfirmedAt">) {
   return state.role === "INTERVIEWER" && !!state.interviewerConfirmedAt && !state.feedbackConfirmedAt;
 }

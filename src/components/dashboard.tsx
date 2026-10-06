@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatInTimeZone } from "date-fns-tz";
 import {
-  CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock3, Download,
+  Ban, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Clock3, Download,
   ExternalLink, FileText, Globe2, Link2, LoaderCircle, LockKeyhole, LogOut, MessageSquareText,
   List, Palette, Pencil, Plus, RefreshCw, Settings2, Trash2, UploadCloud, X,
 } from "lucide-react";
@@ -413,6 +413,7 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
   const [feedbackMode, setFeedbackMode] = useState(false);
   const [feedback, setFeedback] = useState(interview.feedback ?? "");
   const [status, setStatus] = useState<InterviewStatus>(interview.status === "UPCOMING" ? "DONE" : interview.status);
+  const [cancelMode, setCancelMode] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const isCoordinator = role === "COORDINATOR";
@@ -429,6 +430,8 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
   }
   const endTime = +new Date(interview.scheduledAt) + interview.durationMinutes * 60_000;
   const hasStarted = +now >= +new Date(interview.scheduledAt);
+  const coordinatorCanceled = interview.status === "CANCELED" && !interview.feedback;
+  const feedbackAvailable = hasStarted && (interview.status === "UPCOMING" || !!interview.feedback);
   return <Modal title={interviewName(interview)} subtitle={formatInterviewTime(interview.scheduledAt, timezone)} onClose={onClose} wide>
     <div className="detail-status-strip">
       <StatusBadge status={interview.status} />
@@ -442,18 +445,20 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
     </div>
     <div className="detail-layout">
       <div className="detail-main">
-        <section className="detail-section"><h3>Interview essentials</h3><div className="detail-facts"><div><Clock3 /><span><small>When</small>{formatInTimeZone(interview.scheduledAt, timezone, "EEEE, MMMM d · h:mm a")} – {formatInTimeZone(endTime, timezone, "h:mm a zzz")}</span></div><div><FileText /><span><small>Resume</small><a href={`/api/interviews/${interview.id}/resume`} target="_blank" rel="noopener noreferrer">{interview.resume.name}<Download size={14} /></a></span></div></div><a className="button button-primary button-wide" href={interview.meetingUrl} target="_blank" rel="noopener noreferrer">Join interview <ExternalLink size={18} /></a></section>
+        <section className="detail-section"><h3>Interview essentials</h3><div className="detail-facts"><div><Clock3 /><span><small>When</small>{formatInTimeZone(interview.scheduledAt, timezone, "EEEE, MMMM d · h:mm a")} – {formatInTimeZone(endTime, timezone, "h:mm a zzz")}</span></div><div><FileText /><span><small>Resume</small><a href={`/api/interviews/${interview.id}/resume`} target="_blank" rel="noopener noreferrer">{interview.resume.name}<Download size={14} /></a></span></div></div>{interview.status === "CANCELED" ? <div className="canceled-meeting-note"><Ban size={18} /><span><strong>Meeting canceled</strong><small>The confirmed details remain available for reference.</small></span></div> : <a className="button button-primary button-wide" href={interview.meetingUrl} target="_blank" rel="noopener noreferrer">Join interview <ExternalLink size={18} /></a>}</section>
         <section className="detail-section"><h3>Job description</h3><div className="rich-content" dangerouslySetInnerHTML={{ __html: interview.jobDescriptionHtml }} /></section>
         <section className="detail-section feedback-section"><div className="subsection-heading"><h3>Interviewer feedback</h3>{interview.feedbackSubmittedAt && <small>Updated {formatInTimeZone(interview.feedbackSubmittedAt, timezone, "MMM d, h:mm a zzz")}</small>}</div>
           {interview.feedback ? <div className="feedback-box"><StatusBadge status={interview.status} /><p>{interview.feedback}</p></div> : <div className="soft-empty">No feedback has been submitted yet.</div>}
-          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && hasStarted && !feedbackMode && <button className="button button-secondary" onClick={() => setFeedbackMode(true)}><MessageSquareText size={17} />{interview.feedback ? "Edit feedback" : "Add final status & feedback"}</button>}
-          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && !hasStarted && <p className="feedback-locked-note"><LockKeyhole size={14} /> Feedback opens when the interview starts.</p>}
+          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && feedbackAvailable && !feedbackMode && <button className="button button-secondary" onClick={() => setFeedbackMode(true)}><MessageSquareText size={17} />{interview.feedback ? "Edit feedback" : "Add final status & feedback"}</button>}
+          {!isCoordinator && interview.interviewerConfirmedAt && !interview.feedbackConfirmedAt && !hasStarted && interview.status === "UPCOMING" && <p className="feedback-locked-note"><LockKeyhole size={14} /> Feedback opens when the interview starts.</p>}
+          {!isCoordinator && coordinatorCanceled && <p className="feedback-locked-note"><Ban size={14} /> This meeting was canceled; no feedback is required.</p>}
           {feedbackMode && <form className="feedback-form" onSubmit={submitFeedback}><label>Final status<select value={status} onChange={(e) => setStatus(e.target.value as InterviewStatus)}>{finalStatuses.map((value) => <option key={value} value={value}>{statusLabels[value]}</option>)}</select></label><label>Feedback<textarea value={feedback} onChange={(e) => setFeedback(e.target.value)} rows={6} maxLength={10000} placeholder="Share your recommendation, signals, and useful context…" required /></label><div className="form-actions"><button type="button" className="button button-ghost" onClick={() => setFeedbackMode(false)}>Cancel</button><button className="button button-primary" disabled={pending}>{pending && <LoaderCircle className="spin" size={17} />}Save feedback</button></div></form>}
         </section>
       </div>
       <aside className="detail-aside">
         <div className="aside-card"><h3>Handoff</h3>{interview.interviewerConfirmedAt ? <><div className="aside-check"><CheckCircle2 />Confirmed by {interview.interviewerConfirmedByName}</div><p>Interview details are permanently locked.</p></> : <><div className="aside-wait"><Clock3 />Waiting for interviewer</div><p>The interviewer can confirm from the action bar above.</p></>}</div>
         {isCoordinator && !interview.interviewerConfirmedAt && <div className="aside-card"><h3>Manage</h3><button className="button button-secondary button-wide" onClick={onEdit}><Pencil size={16} />Edit details</button><button className="button button-danger-ghost button-wide" onClick={onDelete}><Trash2 size={16} />Delete interview</button></div>}
+        {isCoordinator && interview.interviewerConfirmedAt && interview.status === "UPCOMING" && <div className="aside-card cancellation-card"><h3>Meeting changes</h3><p>If this meeting will not happen, cancel it while preserving the confirmed record.</p>{cancelMode ? <div className="cancel-confirm"><strong>Cancel this interview?</strong><small>Both roles will see it as canceled.</small><div><button className="button button-ghost" disabled={pending} onClick={() => setCancelMode(false)}>Keep scheduled</button><button className="button button-danger" disabled={pending} onClick={() => void mutate(`/api/interviews/${interview.id}/cancel`, "POST", { expectedVersion: interview.version }, "Interview canceled.")}>{pending && <LoaderCircle className="spin" size={16} />}Cancel interview</button></div></div> : <button className="button button-danger-ghost button-wide" onClick={() => setCancelMode(true)}><Ban size={16} />Cancel interview</button>}</div>}
         {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <div className="aside-card attention-card"><h3>Feedback ready</h3><p>Review the note carefully, then use the confirmation action above. Confirmation permanently locks the feedback and final status.</p></div>}
         {interview.feedbackConfirmedAt && <div className="aside-card"><div className="aside-check"><LockKeyhole />Feedback confirmed</div><p>Confirmed by {interview.feedbackConfirmedByName}. Status and feedback are permanently locked.</p></div>}
       </aside>
