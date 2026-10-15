@@ -47,6 +47,7 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
   const [viewMode, setViewMode] = useState<ViewMode>("OVERVIEW");
   const themeSelect = useRef<HTMLSelectElement>(null);
   const [newInterviewTime, setNewInterviewTime] = useState<string | undefined>();
+  const [newInterviewDuration, setNewInterviewDuration] = useState<number | undefined>();
   const [toast, setToast] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -130,12 +131,12 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
             <button className={viewMode === "OVERVIEW" ? "active" : ""} onClick={() => setViewMode("OVERVIEW")}><List size={16} /> Overview</button>
             <button className={viewMode === "CALENDAR" ? "active" : ""} onClick={() => setViewMode("CALENDAR")}><CalendarDays size={16} /> Calendar</button>
           </div>
-          {isCoordinator && <button className="button button-primary button-large" onClick={() => { setNewInterviewTime(undefined); setEditing(null); }}><Plus size={20} /> Schedule interview</button>}
+          {isCoordinator && <button className="button button-primary button-large" onClick={() => { setNewInterviewTime(undefined); setNewInterviewDuration(undefined); setEditing(null); }}><Plus size={20} /> Schedule interview</button>}
         </div>
       </div>
 
       {viewMode === "CALENDAR" ? (
-        <CalendarView interviews={data.interviews} timezone={data.user.timezone} now={now} canSchedule={isCoordinator} onOpen={setSelected} onCreate={(localDateTime) => { setNewInterviewTime(localDateTime); setEditing(null); }} />
+        <CalendarView interviews={data.interviews} timezone={data.user.timezone} now={now} canSchedule={isCoordinator} onOpen={setSelected} onCreate={(localDateTime, durationMinutes) => { setNewInterviewTime(localDateTime); setNewInterviewDuration(durationMinutes); setEditing(null); }} />
       ) : isCoordinator ? (
         <CoordinatorView interviews={data.interviews} timezone={data.user.timezone} onOpen={setSelected} onEdit={(item) => setEditing(item)} onDelete={setDeleteTarget} now={now} />
       ) : (
@@ -143,7 +144,7 @@ export function Dashboard({ initialData }: { initialData: DashboardData }) {
       )}
 
       {selected && <InterviewDetails interview={selected} timezone={data.user.timezone} role={data.user.role} now={now} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} onDelete={() => { setDeleteTarget(selected); setSelected(null); }} onChanged={refresh} />}
-      {editing !== undefined && <ScheduleModal interview={editing} initialDateTime={newInterviewTime} timezone={data.user.timezone} onClose={() => { setEditing(undefined); setNewInterviewTime(undefined); }} onSaved={async () => { setEditing(undefined); setNewInterviewTime(undefined); await refresh(editing ? "Interview updated." : "Interview scheduled and ready for handoff."); }} />}
+      {editing !== undefined && <ScheduleModal interview={editing} initialDateTime={newInterviewTime} initialDuration={newInterviewDuration} timezone={data.user.timezone} onClose={() => { setEditing(undefined); setNewInterviewTime(undefined); setNewInterviewDuration(undefined); }} onSaved={async () => { setEditing(undefined); setNewInterviewTime(undefined); setNewInterviewDuration(undefined); await refresh(editing ? "Interview updated." : "Interview scheduled and ready for handoff."); }} />}
       {timezoneOpen && <TimezoneModal current={data.user.timezone} onClose={() => setTimezoneOpen(false)} onSaved={async () => { setTimezoneOpen(false); await refresh("Workspace timezone updated."); }} />}
       {deleteTarget && <DeleteDialog interview={deleteTarget} onClose={() => setDeleteTarget(null)} onDeleted={async () => { setDeleteTarget(null); await refresh("Interview deleted."); }} />}
       {toast && <div className="toast" role="status"><CheckCircle2 size={18} />{toast}</div>}
@@ -196,11 +197,57 @@ function hourLabel(hour: number) {
   return `${hour % 12 || 12}:00 ${hour >= 12 ? "PM" : "AM"}`;
 }
 
-function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate }: ViewProps & { canSchedule: boolean; onCreate: (localDateTime: string) => void }) {
+function layoutCalendarInterviews(interviews: Interview[]) {
+  const sorted = [...interviews].sort((a, b) => +new Date(a.scheduledAt) - +new Date(b.scheduledAt));
+  const positioned: Array<{ interview: Interview; lane: number; laneCount: number }> = [];
+  let group: Interview[] = [];
+  let groupEnd = -Infinity;
+
+  function placeGroup(items: Interview[]) {
+    const laneEnds: number[] = [];
+    const placements = items.map((interview) => {
+      const start = +new Date(interview.scheduledAt);
+      const end = start + interview.durationMinutes * 60_000;
+      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+      if (lane === -1) lane = laneEnds.length;
+      laneEnds[lane] = end;
+      return { interview, lane };
+    });
+    const laneCount = laneEnds.length;
+    positioned.push(...placements.map((placement) => ({ ...placement, laneCount })));
+  }
+
+  for (const interview of sorted) {
+    const start = +new Date(interview.scheduledAt);
+    const end = start + interview.durationMinutes * 60_000;
+    if (group.length && start >= groupEnd) {
+      placeGroup(group);
+      group = [];
+      groupEnd = -Infinity;
+    }
+    group.push(interview);
+    groupEnd = Math.max(groupEnd, end);
+  }
+  if (group.length) placeGroup(group);
+  return positioned;
+}
+
+type CalendarDragSelection = { pointerId: number; day: string; anchorSlot: number; currentSlot: number };
+
+function calendarSlotTimeLabel(slot: number) {
+  const totalMinutes = (slot * 15) % (24 * 60);
+  const hour = Math.floor(totalMinutes / 60);
+  const minute = totalMinutes % 60;
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`;
+}
+
+function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate }: ViewProps & { canSchedule: boolean; onCreate: (localDateTime: string, durationMinutes?: number) => void }) {
   const todayKey = getZonedDateKey(now, timezone);
   const [selectedDate, setSelectedDate] = useState(todayKey);
   const [calendarMode, setCalendarMode] = useState<"DAY" | "WEEK" | "MONTH">("WEEK");
   const scrollArea = useRef<HTMLDivElement>(null);
+  const dragSelectionRef = useRef<CalendarDragSelection | null>(null);
+  const [dragSelection, setDragSelection] = useState<CalendarDragSelection | null>(null);
   const weekStart = startOfWeek(selectedDate);
   const weekEnd = shiftDateKey(weekStart, 6);
   const days = calendarMode === "DAY" ? [selectedDate] : Array.from({ length: 7 }, (_, index) => shiftDateKey(weekStart, index));
@@ -215,10 +262,17 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
   const pixelsPerHour = 68;
   const gridHeight = (endHour - startHour) * pixelsPerHour;
   const hours = Array.from({ length: endHour - startHour }, (_, index) => startHour + index);
-  const slots = Array.from({ length: (endHour - startHour) * 2 }, (_, index) => index);
+  const slots = Array.from({ length: (endHour - startHour) * 4 }, (_, index) => index);
   const monthStart = `${selectedDate.slice(0, 8)}01`;
   const monthDays = Array.from({ length: 42 }, (_, index) => shiftDateKey(startOfWeek(monthStart), index));
   const selectedMonth = selectedDate.slice(0, 7);
+  const attentionLabel = canSchedule ? "Awaiting coordinator confirmation" : "Awaiting interviewer confirmation";
+
+  function needsAttention(interview: Interview) {
+    return canSchedule
+      ? !!interview.feedback && !interview.feedbackConfirmedAt
+      : interview.status === "UPCOMING" && !interview.interviewerConfirmedAt;
+  }
 
   useEffect(() => {
     if (calendarMode === "MONTH") return;
@@ -236,6 +290,54 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
 
   function navigate(direction: -1 | 1) {
     setSelectedDate((date) => calendarMode === "DAY" ? shiftDateKey(date, direction) : calendarMode === "WEEK" ? shiftDateKey(date, direction * 7) : shiftMonthKey(date, direction));
+  }
+
+  function pointerSlot(element: HTMLDivElement, clientY: number) {
+    const bounds = element.getBoundingClientRect();
+    return Math.max(0, Math.min(slots.length - 1, Math.floor(((clientY - bounds.top) / bounds.height) * slots.length)));
+  }
+
+  function beginSelection(event: React.PointerEvent<HTMLDivElement>, day: string) {
+    if (!canSchedule || (event.target as HTMLElement).closest(".calendar-event")) return;
+    event.preventDefault();
+    const slot = pointerSlot(event.currentTarget, event.clientY);
+    const selection = { pointerId: event.pointerId, day, anchorSlot: slot, currentSlot: slot };
+    dragSelectionRef.current = selection;
+    setDragSelection(selection);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveSelection(event: React.PointerEvent<HTMLDivElement>, day: string) {
+    const current = dragSelectionRef.current;
+    if (!current || current.pointerId !== event.pointerId || current.day !== day) return;
+    event.preventDefault();
+    const rawSlot = pointerSlot(event.currentTarget, event.clientY);
+    const currentSlot = rawSlot >= current.anchorSlot ? Math.min(rawSlot, current.anchorSlot + 31) : Math.max(rawSlot, current.anchorSlot - 31);
+    const next = { ...current, currentSlot };
+    dragSelectionRef.current = next;
+    setDragSelection(next);
+  }
+
+  function finishSelection(event: React.PointerEvent<HTMLDivElement>, day: string) {
+    const current = dragSelectionRef.current;
+    if (!current || current.pointerId !== event.pointerId || current.day !== day) return;
+    event.preventDefault();
+    const startSlot = Math.min(current.anchorSlot, current.currentSlot);
+    const endSlot = Math.max(current.anchorSlot, current.currentSlot) + 1;
+    const totalMinutes = startSlot * 15;
+    const hour = Math.floor(totalMinutes / 60);
+    const minute = totalMinutes % 60;
+    dragSelectionRef.current = null;
+    setDragSelection(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    onCreate(`${day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`, (endSlot - startSlot) * 15);
+  }
+
+  function cancelSelection(event: React.PointerEvent<HTMLDivElement>) {
+    if (dragSelectionRef.current?.pointerId !== event.pointerId) return;
+    dragSelectionRef.current = null;
+    setDragSelection(null);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
   return (
@@ -258,7 +360,7 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
           </div>
         </div>
       </div>
-      {canSchedule && <p className="calendar-tip"><Plus size={14} /> Click an empty {calendarMode === "MONTH" ? "date" : "time"} to schedule an interview.</p>}
+      {canSchedule && <p className="calendar-tip"><Plus size={14} /> {calendarMode === "MONTH" ? "Click an empty date to schedule an interview." : "Click or drag across 15-minute intervals to choose the interview period."}</p>}
       {calendarMode === "MONTH" ? (
         <div className="month-calendar">
           <div className="month-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <span key={day}>{day}</span>)}</div>
@@ -267,7 +369,11 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
             return <div key={day} className={`month-cell ${day.slice(0, 7) !== selectedMonth ? "outside" : ""} ${day === todayKey ? "today" : ""}`}>
               {canSchedule && <button className="month-add-target" onClick={() => onCreate(`${day}T10:00`)} aria-label={`Schedule interview on ${dateKeyLabel(day, { weekday: "long", month: "long", day: "numeric" })}`} />}
               <span className="month-date">{dateKeyLabel(day, { day: "numeric" })}</span>
-              <div className="month-events">{dayInterviews.slice(0, 3).map((item) => <button key={item.id} className={`month-event calendar-event-${item.status.toLowerCase()}`} onClick={() => onOpen(item)} title={`${formatInterviewTime(item.scheduledAt, timezone)} · ${interviewName(item)}`}><b>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</b><span>{interviewName(item)}</span></button>)}{dayInterviews.length > 3 && <small>+{dayInterviews.length - 3} more</small>}</div>
+              <div className="month-events">{dayInterviews.slice(0, 3).map((item) => {
+                const attention = needsAttention(item);
+                const description = `${formatInterviewTime(item.scheduledAt, timezone)} · ${interviewName(item)}${attention ? ` · ${attentionLabel}` : ""}`;
+                return <button key={item.id} className={`month-event calendar-event-${item.status.toLowerCase()} ${attention ? "calendar-event-attention" : ""}`} onClick={() => onOpen(item)} title={description} aria-label={description}><b>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</b><span>{interviewName(item)}</span>{item.status === "CANCELED" ? <X size={10} aria-hidden="true" /> : item.interviewerConfirmedAt && <Check size={10} aria-hidden="true" />}</button>;
+              })}{dayInterviews.length > 3 && <small>+{dayInterviews.length - 3} more</small>}</div>
             </div>;
           })}</div>
         </div>
@@ -283,24 +389,34 @@ function CalendarView({ interviews, timezone, now, canSchedule, onOpen, onCreate
               <div className="calendar-day-columns">
                 {days.map((day) => {
                   const dayInterviews = visibleInterviews.filter((item) => getZonedDateKey(item.scheduledAt, timezone) === day);
+                  const positionedInterviews = layoutCalendarInterviews(dayInterviews);
                   const currentMinutes = Number(formatInTimeZone(now, timezone, "H")) * 60 + Number(formatInTimeZone(now, timezone, "m"));
                   const currentTop = ((currentMinutes - startHour * 60) / 60) * pixelsPerHour;
-                  return <div className={day === todayKey ? "calendar-day-column today" : "calendar-day-column"} key={day}>
+                  const selectionStart = dragSelection?.day === day ? Math.min(dragSelection.anchorSlot, dragSelection.currentSlot) : null;
+                  const selectionEnd = dragSelection?.day === day ? Math.max(dragSelection.anchorSlot, dragSelection.currentSlot) + 1 : null;
+                  return <div className={`${day === todayKey ? "calendar-day-column today" : "calendar-day-column"}${canSchedule ? " schedulable" : ""}`} key={day} onPointerDown={canSchedule ? (event) => beginSelection(event, day) : undefined} onPointerMove={canSchedule ? (event) => moveSelection(event, day) : undefined} onPointerUp={canSchedule ? (event) => finishSelection(event, day) : undefined} onPointerCancel={canSchedule ? cancelSelection : undefined}>
                     {hours.map((hour) => <i className="calendar-hour-line" key={hour} style={{ top: (hour - startHour) * pixelsPerHour }} />)}
                     {canSchedule && slots.map((slot) => {
-                      const totalMinutes = startHour * 60 + slot * 30;
+                      const totalMinutes = startHour * 60 + slot * 15;
                       const hour = Math.floor(totalMinutes / 60);
                       const minute = totalMinutes % 60;
                       const localDateTime = `${day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-                      return <button key={slot} className="calendar-slot" style={{ top: slot * pixelsPerHour / 2, height: pixelsPerHour / 2 }} onClick={() => onCreate(localDateTime)} aria-label={`Schedule interview ${dateKeyLabel(day, { weekday: "long", month: "long", day: "numeric" })} at ${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`} />;
+                      return <button key={slot} className={`calendar-slot ${slot % 2 === 1 ? "half-hour" : ""}`} style={{ top: slot * pixelsPerHour / 4, height: pixelsPerHour / 4 }} onClick={(event) => event.detail === 0 && onCreate(localDateTime, 15)} aria-label={`Schedule a 15-minute interview ${dateKeyLabel(day, { weekday: "long", month: "long", day: "numeric" })} at ${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${hour >= 12 ? "PM" : "AM"}`} />;
                     })}
+                    {selectionStart !== null && selectionEnd !== null && <div className="calendar-drag-selection" style={{ top: selectionStart * pixelsPerHour / 4, height: (selectionEnd - selectionStart) * pixelsPerHour / 4 }}><strong>{calendarSlotTimeLabel(selectionStart)} – {calendarSlotTimeLabel(selectionEnd)}</strong><span>{(selectionEnd - selectionStart) * 15} min</span></div>}
                     {day === todayKey && currentTop >= 0 && currentTop <= gridHeight && <div className="calendar-now-line" style={{ top: currentTop }}><span /></div>}
-                    {dayInterviews.map((item) => {
+                    {positionedInterviews.map(({ interview: item, lane, laneCount }) => {
                       const hour = Number(formatInTimeZone(item.scheduledAt, timezone, "H"));
                       const minute = Number(formatInTimeZone(item.scheduledAt, timezone, "m"));
                       const top = (((hour * 60 + minute) - startHour * 60) / 60) * pixelsPerHour;
                       const height = Math.max(30, item.durationMinutes / 60 * pixelsPerHour);
-                      return <button key={item.id} className={`calendar-event calendar-event-${item.status.toLowerCase()}`} style={{ top, height, left: 4 }} onClick={() => onOpen(item)} title={`${interviewName(item)} · ${formatInterviewTime(item.scheduledAt, timezone)}`}><strong>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</strong><span>{interviewName(item)}</span>{item.interviewerConfirmedAt && <Check size={11} />}</button>;
+                      const lanePercent = 100 / laneCount;
+                      const laneGap = 3;
+                      const widthOffset = (8 + (laneCount - 1) * laneGap) / laneCount;
+                      const leftOffset = 4 + lane * laneGap - lane * widthOffset;
+                      const attention = needsAttention(item);
+                      const description = `${interviewName(item)} · ${formatInterviewTime(item.scheduledAt, timezone)}${attention ? ` · ${attentionLabel}` : ""}`;
+                      return <button key={item.id} className={`calendar-event calendar-event-${item.status.toLowerCase()} ${attention ? "calendar-event-attention" : ""}`} style={{ top, height, left: `calc(${lane * lanePercent}% + ${leftOffset}px)`, width: `calc(${lanePercent}% - ${widthOffset}px)` }} onClick={() => onOpen(item)} title={description} aria-label={description}><strong>{formatInTimeZone(item.scheduledAt, timezone, "h:mm a")}</strong><span>{interviewName(item)}</span>{item.status === "CANCELED" ? <X size={12} aria-hidden="true" /> : item.interviewerConfirmedAt && <Check size={11} aria-hidden="true" />}</button>;
                     })}
                   </div>;
                 })}
@@ -468,7 +584,7 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
       <span className="detail-countdown">{relativeStartLabel(interview.scheduledAt, interview.durationMinutes, now)}</span>
       <div className="detail-primary-action">
         {!isCoordinator && !interview.interviewerConfirmedAt && <button className="button button-primary" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm`, "POST", { expectedVersion: interview.version }, "Interview confirmed. Details are now locked.")}>Confirm interview</button>}
-        {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <button className="button button-ink" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm-feedback`, "POST", { expectedVersion: interview.version }, "Feedback confirmed. The loop is closed.")}>Confirm feedback <Check size={16} /></button>}
+        {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <button className="button button-primary confirm-feedback-button" disabled={pending} onClick={() => mutate(`/api/interviews/${interview.id}/confirm-feedback`, "POST", { expectedVersion: interview.version }, "Feedback confirmed. The loop is closed.")}><CheckCircle2 size={16} />Confirm feedback</button>}
       </div>
     </div>
     <div className="detail-layout">
@@ -486,7 +602,7 @@ function InterviewDetails({ interview, timezone, role, now, onClose, onEdit, onD
       <aside className="detail-aside">
         <div className="aside-card"><h3>Handoff</h3>{interview.interviewerConfirmedAt ? <><div className="aside-check"><CheckCircle2 />Confirmed by {interview.interviewerConfirmedByName}</div><p>Interview details are permanently locked.</p></> : <><div className="aside-wait"><Clock3 />Waiting for interviewer</div><p>The interviewer can confirm from the action bar above.</p></>}</div>
         {isCoordinator && !interview.interviewerConfirmedAt && <div className="aside-card"><h3>Manage</h3><button className="button button-secondary button-wide" onClick={onEdit}><Pencil size={16} />Edit details</button><button className="button button-danger-ghost button-wide" onClick={onDelete}><Trash2 size={16} />Delete interview</button></div>}
-        {isCoordinator && interview.interviewerConfirmedAt && interview.status === "UPCOMING" && <div className="aside-card cancellation-card"><h3>Meeting changes</h3><p>If this meeting will not happen, cancel it while preserving the confirmed record.</p>{cancelMode ? <div className="cancel-confirm"><strong>Cancel this interview?</strong><small>Both roles will see it as canceled.</small><div><button className="button button-ghost" disabled={pending} onClick={() => setCancelMode(false)}>Keep scheduled</button><button className="button button-danger" disabled={pending} onClick={() => void mutate(`/api/interviews/${interview.id}/cancel`, "POST", { expectedVersion: interview.version }, "Interview canceled.")}>{pending && <LoaderCircle className="spin" size={16} />}Cancel interview</button></div></div> : <button className="button button-danger-ghost button-wide" onClick={() => setCancelMode(true)}><Ban size={16} />Cancel interview</button>}</div>}
+        {isCoordinator && interview.status === "UPCOMING" && +new Date(interview.scheduledAt) > +now && <div className="aside-card cancellation-card"><h3>Meeting changes</h3><p>If this meeting will not happen, cancel it before its start time while preserving the record.</p>{cancelMode ? <div className="cancel-confirm"><strong>Cancel this interview?</strong><small>Both roles will see it as canceled.</small><div><button className="button button-ghost" disabled={pending} onClick={() => setCancelMode(false)}>Keep scheduled</button><button className="button button-danger" disabled={pending} onClick={() => void mutate(`/api/interviews/${interview.id}/cancel`, "POST", { expectedVersion: interview.version }, "Interview canceled.")}>{pending && <LoaderCircle className="spin" size={16} />}Cancel interview</button></div></div> : <button className="button button-danger-ghost button-wide" onClick={() => setCancelMode(true)}><Ban size={16} />Cancel interview</button>}</div>}
         {isCoordinator && interview.feedback && !interview.feedbackConfirmedAt && <div className="aside-card attention-card"><h3>Feedback ready</h3><p>Review the note carefully, then use the confirmation action above. Confirmation permanently locks the feedback and final status.</p></div>}
         {interview.feedbackConfirmedAt && <div className="aside-card"><div className="aside-check"><LockKeyhole />Feedback confirmed</div><p>Confirmed by {interview.feedbackConfirmedByName}. Status and feedback are permanently locked.</p></div>}
       </aside>
@@ -577,10 +693,10 @@ function plainTextToHtml(value: string) {
   return escaped.split(/\n{2,}/).map((paragraph) => `<p>${paragraph.replaceAll("\n", "<br>")}</p>`).join("");
 }
 
-function ScheduleModal({ interview, initialDateTime, timezone, onClose, onSaved }: { interview: Interview | null; initialDateTime?: string; timezone: string; onClose: () => void; onSaved: () => Promise<void> }) {
+function ScheduleModal({ interview, initialDateTime, initialDuration, timezone, onClose, onSaved }: { interview: Interview | null; initialDateTime?: string; initialDuration?: number; timezone: string; onClose: () => void; onSaved: () => Promise<void> }) {
   const [dateTime, setDateTime] = useState(() => interview ? formatInTimeZone(interview.scheduledAt, timezone, "yyyy-MM-dd'T'HH:mm") : initialDateTime ?? formatInTimeZone(Date.now() + 86_400_000, timezone, "yyyy-MM-dd'T'10:00"));
-  const [duration, setDuration] = useState(interview?.durationMinutes ?? 60);
-  const [customDuration, setCustomDuration] = useState(![15,30,45,60,90].includes(interview?.durationMinutes ?? 60));
+  const [duration, setDuration] = useState(interview?.durationMinutes ?? initialDuration ?? 60);
+  const [customDuration, setCustomDuration] = useState(![15,30,45,60,90].includes(interview?.durationMinutes ?? initialDuration ?? 60));
   const [meetingUrl, setMeetingUrl] = useState(interview?.meetingUrl ?? "");
   const [resume, setResume] = useState<ResumeFile | null>(interview?.resume ?? null);
   const [resumeError, setResumeError] = useState("");

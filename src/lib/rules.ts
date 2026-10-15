@@ -2,6 +2,7 @@ import type { InterviewStatus, Role } from "./types";
 
 export type LockState = {
   role: Role;
+  scheduledAt: string;
   version: number;
   expectedVersion: number;
   interviewerConfirmedAt: string | null;
@@ -17,8 +18,8 @@ export const canDeleteInterview = canEditInterview;
 export function canConfirmInterview(state: Pick<LockState, "role" | "interviewerConfirmedAt">) {
   return state.role === "INTERVIEWER" && !state.interviewerConfirmedAt;
 }
-export function canCancelInterview(state: Pick<LockState, "role" | "interviewerConfirmedAt" | "feedback" | "feedbackConfirmedAt" | "status">) {
-  return state.role === "COORDINATOR" && !!state.interviewerConfirmedAt && state.status === "UPCOMING" && !state.feedback && !state.feedbackConfirmedAt;
+export function canCancelInterview(state: Pick<LockState, "role" | "scheduledAt" | "feedback" | "feedbackConfirmedAt" | "status">, now: Date) {
+  return state.role === "COORDINATOR" && state.status === "UPCOMING" && +new Date(state.scheduledAt) > +now && !state.feedback && !state.feedbackConfirmedAt;
 }
 export function canEditFeedback(state: Pick<LockState, "role" | "interviewerConfirmedAt" | "feedbackConfirmedAt">) {
   return state.role === "INTERVIEWER" && !!state.interviewerConfirmedAt && !state.feedbackConfirmedAt;

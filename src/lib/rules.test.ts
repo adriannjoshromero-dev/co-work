@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canCancelInterview, canConfirmFeedback, canConfirmInterview, canDeleteInterview, canEditFeedback, canEditInterview, isFresh, roleAllowed, type LockState } from "./rules";
 
-const base: LockState = { role: "COORDINATOR", version: 2, expectedVersion: 2, interviewerConfirmedAt: null, feedback: null, feedbackConfirmedAt: null, status: "UPCOMING" };
+const base: LockState = { role: "COORDINATOR", scheduledAt: "2026-02-01T15:00:00.000Z", version: 2, expectedVersion: 2, interviewerConfirmedAt: null, feedback: null, feedbackConfirmedAt: null, status: "UPCOMING" };
 
 describe("authorization and permanent locks", () => {
   it("enforces authentication roles", () => {
@@ -20,12 +20,15 @@ describe("authorization and permanent locks", () => {
     expect(canConfirmInterview(base)).toBe(false);
     expect(canConfirmInterview({ ...base, role: "INTERVIEWER", interviewerConfirmedAt: "2026-01-01" })).toBe(false);
   });
-  it("allows a Coordinator to cancel a confirmed upcoming interview", () => {
+  it("allows a Coordinator to cancel any not-started upcoming interview", () => {
+    const now = new Date("2026-02-01T14:00:00.000Z");
     const confirmed = { ...base, interviewerConfirmedAt: "2026-01-01" };
-    expect(canCancelInterview(confirmed)).toBe(true);
-    expect(canCancelInterview({ ...confirmed, role: "INTERVIEWER" })).toBe(false);
-    expect(canCancelInterview({ ...confirmed, status: "CANCELED" })).toBe(false);
-    expect(canCancelInterview({ ...confirmed, feedback: "Already completed", status: "DONE" })).toBe(false);
+    expect(canCancelInterview(base, now)).toBe(true);
+    expect(canCancelInterview(confirmed, now)).toBe(true);
+    expect(canCancelInterview({ ...confirmed, role: "INTERVIEWER" }, now)).toBe(false);
+    expect(canCancelInterview({ ...confirmed, status: "CANCELED" }, now)).toBe(false);
+    expect(canCancelInterview({ ...confirmed, scheduledAt: now.toISOString() }, now)).toBe(false);
+    expect(canCancelInterview({ ...confirmed, feedback: "Already completed", status: "DONE" }, now)).toBe(false);
   });
   it("lets the Interviewer edit submitted feedback until Coordinator confirmation", () => {
     const editable = { ...base, role: "INTERVIEWER" as const, interviewerConfirmedAt: "2026-01-01", feedback: "Recommend", status: "DONE" as const };
